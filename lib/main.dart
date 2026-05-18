@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io'
     show Platform, HttpHeaders, HttpClient, HttpClientRequest, HttpClientResponse;
-import 'dart:math' as math;
-import 'dart:ui';
 
 import 'package:appsflyer_sdk/appsflyer_sdk.dart' as appsflyer_core;
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -12,61 +10,96 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
-    show MethodChannel, SystemChrome, SystemUiOverlayStyle, MethodCall;
+    show
+    MethodChannel,
+    SystemChrome,
+    SystemUiOverlayStyle,
+    MethodCall,
+    VoidCallback;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import 'package:loungeoflendess/psladnes.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-import 'package:provider/provider.dart';
 
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz_zone;
 
 import 'ledness.dart';
+import 'loader.dart';
 
 // ============================================================================
 // Константы
 // ============================================================================
 
-const String loungeOfIdlenessLoadedOnceKey = 'loaded_once';
-const String loungeOfIdlenessStatEndpoint = 'https://sub.sllounge.club/stat';
-const String loungeOfIdlenessCachedFcmKey = 'cached_fcm';
-const String loungeOfIdlenessCachedDeepKey = 'cached_deep_push_uri';
+const String idleLoadedOnceKey = 'loaded_once';
+const String idleStatEndpoint = 'https://sub.sllounge.club/stat';
+const String idleCachedFcmKey = 'cached_fcm';
+const String idleCachedDeepKey = 'cached_deep_push_uri';
+
+const Set<String> idleBankSchemes = {
+  'td',
+  'rbc',
+  'cibc',
+  'scotiabank',
+  'bmo',
+  'bmodigitalbanking',
+  'desjardins',
+  'tangerine',
+  'nationalbank',
+  'simplii',
+  'dominotoronto',
+};
+
+const Set<String> idleBankDomains = {
+  'td.com',
+  'tdcanadatrust.com',
+  'easyweb.td.com',
+  'rbc.com',
+  'royalbank.com',
+  'online.royalbank.com',
+  'cibc.com',
+  'cibc.ca',
+  'online.cibc.com',
+  'scotiabank.com',
+  'scotiaonline.scotiabank.com',
+  'bmo.com',
+  'bmo.ca',
+  'bmodigitalbanking.com',
+  'desjardins.com',
+  'tangerine.ca',
+  'nbc.ca',
+  'nationalbank.ca',
+  'simplii.com',
+  'simplii.ca',
+  'dominotoronto.com',
+  'dominobank.com',
+};
 
 // ============================================================================
 // Лёгкие сервисы
 // ============================================================================
 
-class LoungeOfIdlenessLoggerService {
-  static final LoungeOfIdlenessLoggerService sharedLoungeInstance =
-  LoungeOfIdlenessLoggerService._internalLoungeConstructor();
+class IdleLoggerService {
+  static final IdleLoggerService SharedInstance =
+  IdleLoggerService._InternalConstructor();
 
-  LoungeOfIdlenessLoggerService._internalLoungeConstructor();
+  IdleLoggerService._InternalConstructor();
 
-  factory LoungeOfIdlenessLoggerService() => sharedLoungeInstance;
+  factory IdleLoggerService() => SharedInstance;
 
-  final Connectivity loungeOfIdlenessConnectivity = Connectivity();
+  final Connectivity IdleConnectivity = Connectivity();
 
-  void loungeOfIdlenessLogInfo(Object message) => debugPrint('[I] $message');
-  void loungeOfIdlenessLogWarn(Object message) => debugPrint('[W] $message');
-  void loungeOfIdlenessLogError(Object message) => debugPrint('[E] $message');
+  void IdleLogInfo(Object message) => print('[I] $message');
+  void IdleLogWarn(Object message) => print('[W] $message');
+  void IdleLogError(Object message) => print('[E] $message');
 }
 
-class LoungeOfIdlenessNetworkService {
-  final LoungeOfIdlenessLoggerService loungeOfIdlenessLogger =
-  LoungeOfIdlenessLoggerService();
+class IdleNetworkService {
+  final IdleLoggerService IdleLogger = IdleLoggerService();
 
-  Future<bool> loungeOfIdlenessIsOnline() async {
-    final List<ConnectivityResult> loungeOfIdlenessResults =
-    await loungeOfIdlenessLogger.loungeOfIdlenessConnectivity
-        .checkConnectivity();
-    return loungeOfIdlenessResults.isNotEmpty &&
-        !loungeOfIdlenessResults.contains(ConnectivityResult.none);
-  }
-
-  Future<void> loungeOfIdlenessPostJson(
+  Future<void> IdlePostJson(
       String url,
       Map<String, dynamic> data,
       ) async {
@@ -77,9 +110,42 @@ class LoungeOfIdlenessNetworkService {
         body: jsonEncode(data),
       );
     } catch (error) {
-      loungeOfIdlenessLogger
-          .loungeOfIdlenessLogError('postJson error: $error');
+      IdleLogger.IdleLogError('postJson error: $error');
     }
+  }
+}
+
+// ============================================================================
+// Утилита: одновременное сохранение JSON в localStorage и SharedPreferences
+// ============================================================================
+
+Future<void> IdleSaveJsonToLocalStorageAndPrefs({
+  required InAppWebViewController? controller,
+  required String key,
+  required Map<String, dynamic> data,
+}) async {
+  final String jsonString = jsonEncode(data);
+
+  // 1) localStorage в WebView
+  if (controller != null) {
+    try {
+      await controller.evaluateJavascript(
+        source:
+        "localStorage.setItem('$key', JSON.stringify($jsonString));",
+      );
+    } catch (e, st) {
+      IdleLoggerService().IdleLogError(
+          'IdleSaveJsonToLocalStorageAndPrefs localStorage error: $e\n$st');
+    }
+  }
+
+  // 2) SharedPreferences на native-стороне
+  try {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, jsonString);
+  } catch (e, st) {
+    IdleLoggerService().IdleLogError(
+        'IdleSaveJsonToLocalStorageAndPrefs prefs error: $e\n$st');
   }
 }
 
@@ -87,74 +153,81 @@ class LoungeOfIdlenessNetworkService {
 // Профиль устройства
 // ============================================================================
 
-class LoungeOfIdlenessDeviceProfile {
-  String? loungeOfIdlenessDeviceId;
-  String? loungeOfIdlenessSessionId = 'retrocar-session';
-  String? loungeOfIdlenessPlatformName;
-  String? loungeOfIdlenessOsVersion;
-  String? loungeOfIdlenessAppVersion;
-  String? loungeOfIdlenessLanguageCode;
-  String? loungeOfIdlenessTimezoneName;
-  bool loungeOfIdlenessPushEnabled = false;
+class IdleDeviceProfile {
+  String? IdleDeviceId;
+  String? IdleSessionId = '';
+  String? IdlePlatformName;
+  String? IdleOsVersion;
+  String? IdleAppVersion;
+  String? IdleLanguageCode;
+  String? IdleTimezoneName;
+  bool IdlePushEnabled = false;
 
-  Future<void> loungeOfIdlenessInitialize() async {
-    final DeviceInfoPlugin loungeOfIdlenessDeviceInfoPlugin =
-    DeviceInfoPlugin();
+  bool IdleSafeAreaEnabled = false;
+  String? IdleSafeAreaColor;
+  bool safecasher = true; // будет обновляться с сервера
+  String? IdleBaseUserAgent;
+
+  Map<String, dynamic>? IdleLastPushData;
+
+  Map<String, dynamic>? IdleSavels;
+
+  Future<void> IdleInitialize() async {
+    final DeviceInfoPlugin idleDeviceInfoPlugin = DeviceInfoPlugin();
 
     if (Platform.isAndroid) {
-      final AndroidDeviceInfo loungeOfIdlenessAndroidInfo =
-      await loungeOfIdlenessDeviceInfoPlugin.androidInfo;
-      loungeOfIdlenessDeviceId = loungeOfIdlenessAndroidInfo.id;
-      loungeOfIdlenessPlatformName = 'android';
-      loungeOfIdlenessOsVersion =
-          loungeOfIdlenessAndroidInfo.version.release;
+      final AndroidDeviceInfo idleAndroidInfo =
+      await idleDeviceInfoPlugin.androidInfo;
+      IdleDeviceId = idleAndroidInfo.id;
+      IdlePlatformName = 'android';
+      IdleOsVersion = idleAndroidInfo.version.release;
     } else if (Platform.isIOS) {
-      final IosDeviceInfo loungeOfIdlenessIosInfo =
-      await loungeOfIdlenessDeviceInfoPlugin.iosInfo;
-      loungeOfIdlenessDeviceId =
-          loungeOfIdlenessIosInfo.identifierForVendor;
-      loungeOfIdlenessPlatformName = 'ios';
-      loungeOfIdlenessOsVersion =
-          loungeOfIdlenessIosInfo.systemVersion;
+      final IosDeviceInfo idleIosInfo = await idleDeviceInfoPlugin.iosInfo;
+      IdleDeviceId = idleIosInfo.identifierForVendor;
+      IdlePlatformName = 'ios';
+      IdleOsVersion = idleIosInfo.systemVersion;
     }
 
-    final PackageInfo loungeOfIdlenessPackageInfo =
-    await PackageInfo.fromPlatform();
-    loungeOfIdlenessAppVersion = loungeOfIdlenessPackageInfo.version;
-    loungeOfIdlenessLanguageCode = Platform.localeName.split('_').first;
-    loungeOfIdlenessTimezoneName = tz_zone.local.name;
-    loungeOfIdlenessSessionId =
-    'retrocar-${DateTime.now().millisecondsSinceEpoch}';
+    final PackageInfo idlePackageInfo = await PackageInfo.fromPlatform();
+    IdleAppVersion = idlePackageInfo.version;
+    IdleLanguageCode = Platform.localeName.split('_').first;
+    IdleTimezoneName = tz_zone.local.name;
+    IdleSessionId = 'test-${DateTime.now().millisecondsSinceEpoch}';
   }
 
-  Map<String, dynamic> loungeOfIdlenessToMap({String? fcmToken}) =>
-      <String, dynamic>{
-        'fcm_token': fcmToken ?? 'missing_token',
-        'device_id': loungeOfIdlenessDeviceId ?? 'missing_id',
-        'app_name': 'sllounge',
-        'instance_id': loungeOfIdlenessSessionId ?? 'missing_session',
-        'platform': loungeOfIdlenessPlatformName ?? 'missing_system',
-        'os_version': loungeOfIdlenessOsVersion ?? 'missing_build',
-        'app_version': loungeOfIdlenessAppVersion ?? 'missing_app',
-        'language': loungeOfIdlenessLanguageCode ?? 'en',
-        'timezone': loungeOfIdlenessTimezoneName ?? 'UTC',
-        'push_enabled': loungeOfIdlenessPushEnabled,
-      };
+  Map<String, dynamic> IdleToMap({String? fcmToken}) => <String, dynamic>{
+    'fcm_token': fcmToken ?? 'missing_token',
+    'device_id': IdleDeviceId ?? 'missing_id',
+    'app_name': 'sllounge',
+    'instance_id': IdleSessionId ?? 'missing_session',
+    'platform': IdlePlatformName ?? 'missing_system',
+    'os_version': IdleOsVersion ?? 'missing_build',
+    'app_version': "1.4.1" ?? 'missing_app',
+    'language': IdleLanguageCode ?? 'en',
+    'timezone': IdleTimezoneName ?? 'UTC',
+    'push_enabled': IdlePushEnabled,
+    'safe_area_native': IdleSafeAreaEnabled,
+    'useragent': IdleBaseUserAgent ?? 'unknown_useragent',
+    'savels': IdleSavels ?? <String, dynamic>{},
+    'fpscashier': safecasher,
+  };
 }
 
 // ============================================================================
 // AppsFlyer Spy
 // ============================================================================
 
-class LoungeOfIdlenessAnalyticsSpyService {
-  appsflyer_core.AppsFlyerOptions? loungeOfIdlenessAppsFlyerOptions;
-  appsflyer_core.AppsflyerSdk? loungeOfIdlenessAppsFlyerSdk;
+class IdleAnalyticsSpyService {
+  appsflyer_core.AppsFlyerOptions? IdleAppsFlyerOptions;
+  appsflyer_core.AppsflyerSdk? IdleAppsFlyerSdk;
 
-  String loungeOfIdlenessAppsFlyerUid = '';
-  String loungeOfIdlenessAppsFlyerData = '';
+  String IdleAppsFlyerUid = '';
+  String IdleAppsFlyerData = '';
 
-  void loungeOfIdlenessStartTracking({VoidCallback? onUpdate}) {
-    final appsflyer_core.AppsFlyerOptions loungeOfIdlenessConfig =
+  Map<String, dynamic>? IdleAppsFlyerOneLinkData;
+
+  void IdleStartTracking({VoidCallback? onUpdate}) {
+    final appsflyer_core.AppsFlyerOptions idleConfig =
     appsflyer_core.AppsFlyerOptions(
       afDevKey: 'qsBLmy7dAXDQhowM8V3ca4',
       appId: '6759056932',
@@ -162,173 +235,37 @@ class LoungeOfIdlenessAnalyticsSpyService {
       timeToWaitForATTUserAuthorization: 0,
     );
 
-    loungeOfIdlenessAppsFlyerOptions = loungeOfIdlenessConfig;
-    loungeOfIdlenessAppsFlyerSdk =
-        appsflyer_core.AppsflyerSdk(loungeOfIdlenessConfig);
+    IdleAppsFlyerOptions = idleConfig;
+    IdleAppsFlyerSdk = appsflyer_core.AppsflyerSdk(idleConfig);
 
-    loungeOfIdlenessAppsFlyerSdk?.initSdk(
+    IdleAppsFlyerSdk?.initSdk(
       registerConversionDataCallback: true,
       registerOnAppOpenAttributionCallback: true,
       registerOnDeepLinkingCallback: true,
     );
 
-    loungeOfIdlenessAppsFlyerSdk?.startSDK(
-      onSuccess: () => LoungeOfIdlenessLoggerService()
-          .loungeOfIdlenessLogInfo('RetroCarAnalyticsSpy started'),
-      onError: (int code, String msg) => LoungeOfIdlenessLoggerService()
-          .loungeOfIdlenessLogError('RetroCarAnalyticsSpy error $code: $msg'),
+    IdleAppsFlyerSdk?.startSDK(
+      onSuccess: () =>
+          IdleLoggerService().IdleLogInfo('RetroCarAnalyticsSpy started'),
+      onError: (int code, String msg) =>
+          IdleLoggerService().IdleLogError('RetroCarAnalyticsSpy error $code: $msg'),
     );
 
-    loungeOfIdlenessAppsFlyerSdk?.onInstallConversionData(
-            (dynamic value) {
-          loungeOfIdlenessAppsFlyerData = value.toString();
-          onUpdate?.call();
-        });
+    IdleAppsFlyerSdk?.onInstallConversionData((dynamic value) {
+      IdleAppsFlyerData = value.toString();
+      onUpdate?.call();
+    });
 
-    loungeOfIdlenessAppsFlyerSdk?.getAppsFlyerUID().then((dynamic value) {
-      loungeOfIdlenessAppsFlyerUid = value.toString();
+    IdleAppsFlyerSdk?.getAppsFlyerUID().then((dynamic value) {
+      IdleAppsFlyerUid = value.toString();
       onUpdate?.call();
     });
   }
-}
 
-// ============================================================================
-// Новый лоадер Lounge of Idleness
-// ============================================================================
-
-class LoungeOfIdlenessWaveLoader extends StatefulWidget {
-  const LoungeOfIdlenessWaveLoader({Key? key}) : super(key: key);
-
-  @override
-  State<LoungeOfIdlenessWaveLoader> createState() =>
-      _LoungeOfIdlenessWaveLoaderState();
-}
-
-class _LoungeOfIdlenessWaveLoaderState
-    extends State<LoungeOfIdlenessWaveLoader>
-    with SingleTickerProviderStateMixin {
-  late AnimationController loungeOfIdlenessWaveController;
-
-  @override
-  void initState() {
-    super.initState();
-    loungeOfIdlenessWaveController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    loungeOfIdlenessWaveController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const Color loungeOfIdlenessBackground = Color(0xFF05071B);
-    const Color loungeOfIdlenessPrimary = Color(0xFF49F2FF);
-    const Color loungeOfIdlenessSecondary = Color(0xFFFFA54B);
-
-    const String loungeOfIdlenessTitle = 'Lounge';
-    const String loungeOfIdlenessSubtitle = 'of Idleness';
-
-    return Container(
-      color: loungeOfIdlenessBackground,
-      child: Center(
-        child: AnimatedBuilder(
-          animation: loungeOfIdlenessWaveController,
-          builder: (BuildContext context, Widget? child) {
-            final double loungeOfIdlenessT =
-                loungeOfIdlenessWaveController.value * 2 * math.pi;
-
-            List<Widget> loungeOfIdlenessLetters = <Widget>[];
-            for (int loungeOfIdlenessIndex = 0;
-            loungeOfIdlenessIndex < loungeOfIdlenessTitle.length;
-            loungeOfIdlenessIndex++) {
-              final String loungeOfIdlenessChar =
-              loungeOfIdlenessTitle[loungeOfIdlenessIndex];
-              final double loungeOfIdlenessPhase =
-                  loungeOfIdlenessT + loungeOfIdlenessIndex * 0.6;
-              final double loungeOfIdlenessDy =
-                  math.sin(loungeOfIdlenessPhase) * 6.0;
-              final double loungeOfIdlenessOpacity =
-                  0.7 + 0.3 * math.sin(loungeOfIdlenessPhase).abs();
-
-              loungeOfIdlenessLetters.add(
-                Transform.translate(
-                  offset: Offset(0, loungeOfIdlenessDy),
-                  child: Text(
-                    loungeOfIdlenessChar,
-                    style: TextStyle(
-                      fontFamily: 'Roboto',
-                      fontSize: 40,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 4,
-                      color: loungeOfIdlenessPrimary
-                          .withOpacity(loungeOfIdlenessOpacity),
-                      shadows: <Shadow>[
-                        Shadow(
-                          color: loungeOfIdlenessSecondary.withOpacity(
-                              0.6 * loungeOfIdlenessOpacity),
-                          blurRadius: 16,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 32, vertical: 20),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(40),
-                    color: Colors.transparent,
-                    boxShadow: <BoxShadow>[
-                      BoxShadow(
-                        color: loungeOfIdlenessPrimary.withOpacity(0.2),
-                        blurRadius: 40,
-                        spreadRadius: 4,
-                      ),
-                    ],
-                    border: Border.all(
-                      color: loungeOfIdlenessPrimary.withOpacity(0.9),
-                      width: 3,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: loungeOfIdlenessLetters,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  loungeOfIdlenessSubtitle,
-                  style: TextStyle(
-                    fontFamily: 'Roboto',
-                    fontSize: 22,
-                    fontStyle: FontStyle.italic,
-                    letterSpacing: 3,
-                    color: loungeOfIdlenessPrimary.withOpacity(0.9),
-                    shadows: <Shadow>[
-                      Shadow(
-                        color: loungeOfIdlenessSecondary.withOpacity(0.7),
-                        blurRadius: 18,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
+  void IdleSetOneLinkData(Map<String, dynamic> data) {
+    IdleAppsFlyerOneLinkData = data;
+    IdleLoggerService()
+        .IdleLogInfo('IdleAnalyticsSpyService: OneLink data updated: $data');
   }
 }
 
@@ -337,244 +274,154 @@ class _LoungeOfIdlenessWaveLoaderState
 // ============================================================================
 
 @pragma('vm:entry-point')
-Future<void> loungeOfIdlenessFcmBackgroundHandler(
-    RemoteMessage message) async {
+Future<void> IdleFcmBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
 
-  LoungeOfIdlenessLoggerService()
-      .loungeOfIdlenessLogInfo('bg-fcm: ${message.messageId}');
-  LoungeOfIdlenessLoggerService()
-      .loungeOfIdlenessLogInfo('bg-data: ${message.data}');
+  IdleLoggerService().IdleLogInfo('bg-fcm: ${message.messageId}');
+  IdleLoggerService().IdleLogInfo('bg-data: ${message.data}');
 
-  final dynamic loungeOfIdlenessLink = message.data['uri'];
-  if (loungeOfIdlenessLink != null) {
+  final dynamic idleLink = message.data['uri'];
+  if (idleLink != null) {
     try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      await loungeOfIdlenessPrefs.setString(
-        loungeOfIdlenessCachedDeepKey,
-        loungeOfIdlenessLink.toString(),
+      final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+      await idlePrefs.setString(
+        idleCachedDeepKey,
+        idleLink.toString(),
       );
     } catch (e) {
-      LoungeOfIdlenessLoggerService()
-          .loungeOfIdlenessLogError('bg-fcm save deep failed: $e');
+      IdleLoggerService().IdleLogError('bg-fcm save deep failed: $e');
     }
   }
 }
 
 // ============================================================================
-// BLoC (на ChangeNotifier) + состояние
+// FCM Bridge — токен
 // ============================================================================
 
-class LoungeOfIdlenessAppState {
-  final String? loungeOfIdlenessFcmToken;
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile;
-  final bool loungeOfIdlenessIsDeviceReady;
-  final bool loungeOfIdlenessIsAppsFlyerReady;
+class IdleFcmBridge {
+  final IdleLoggerService IdleLogger = IdleLoggerService();
 
-  const LoungeOfIdlenessAppState({
-    required this.loungeOfIdlenessFcmToken,
-    required this.loungeOfIdlenessDeviceProfile,
-    required this.loungeOfIdlenessIsDeviceReady,
-    required this.loungeOfIdlenessIsAppsFlyerReady,
-  });
+  static const MethodChannel _tokenChannel =
+  MethodChannel('com.example.fcm/token');
 
-  LoungeOfIdlenessAppState loungeOfIdlenessCopyWith({
-    String? loungeOfIdlenessFcmToken,
-    LoungeOfIdlenessDeviceProfile? loungeOfIdlenessDeviceProfile,
-    bool? loungeOfIdlenessIsDeviceReady,
-    bool? loungeOfIdlenessIsAppsFlyerReady,
-  }) {
-    return LoungeOfIdlenessAppState(
-      loungeOfIdlenessFcmToken:
-      loungeOfIdlenessFcmToken ?? this.loungeOfIdlenessFcmToken,
-      loungeOfIdlenessDeviceProfile:
-      loungeOfIdlenessDeviceProfile ?? this.loungeOfIdlenessDeviceProfile,
-      loungeOfIdlenessIsDeviceReady:
-      loungeOfIdlenessIsDeviceReady ?? this.loungeOfIdlenessIsDeviceReady,
-      loungeOfIdlenessIsAppsFlyerReady: loungeOfIdlenessIsAppsFlyerReady ??
-          this.loungeOfIdlenessIsAppsFlyerReady,
-    );
-  }
-}
-
-class LoungeOfIdlenessAppBloc extends ChangeNotifier {
-  final LoungeOfIdlenessLoggerService loungeOfIdlenessLoggerService =
-  LoungeOfIdlenessLoggerService();
-  final LoungeOfIdlenessAnalyticsSpyService
-  loungeOfIdlenessAnalyticsSpyService;
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile;
-
-  LoungeOfIdlenessAppState loungeOfIdlenessState;
-
-  LoungeOfIdlenessAppState get state => loungeOfIdlenessState;
-
-  LoungeOfIdlenessAppBloc({
-    required this.loungeOfIdlenessAnalyticsSpyService,
-    required this.loungeOfIdlenessDeviceProfile,
-  }) : loungeOfIdlenessState = LoungeOfIdlenessAppState(
-    loungeOfIdlenessFcmToken: null,
-    loungeOfIdlenessDeviceProfile: loungeOfIdlenessDeviceProfile,
-    loungeOfIdlenessIsDeviceReady: false,
-    loungeOfIdlenessIsAppsFlyerReady: false,
-  );
-
-  Future<void> loungeOfIdlenessInitialize() async {
-    await loungeOfIdlenessInitDeviceProfile();
-    await loungeOfIdlenessInitAppsFlyer();
-    await loungeOfIdlenessInitFcmToken();
-  }
-
-  Future<void> loungeOfIdlenessInitDeviceProfile() async {
-    try {
-      await loungeOfIdlenessDeviceProfile.loungeOfIdlenessInitialize();
-
-      final FirebaseMessaging loungeOfIdlenessMessaging =
-          FirebaseMessaging.instance;
-      final NotificationSettings loungeOfIdlenessSettings =
-      await loungeOfIdlenessMessaging.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
-      loungeOfIdlenessDeviceProfile.loungeOfIdlenessPushEnabled =
-          loungeOfIdlenessSettings.authorizationStatus ==
-              AuthorizationStatus.authorized ||
-              loungeOfIdlenessSettings.authorizationStatus ==
-                  AuthorizationStatus.provisional;
-
-      loungeOfIdlenessState = loungeOfIdlenessState.loungeOfIdlenessCopyWith(
-        loungeOfIdlenessDeviceProfile: loungeOfIdlenessDeviceProfile,
-        loungeOfIdlenessIsDeviceReady: true,
-      );
-      notifyListeners();
-    } catch (e, st) {
-      loungeOfIdlenessLoggerService.loungeOfIdlenessLogError(
-          'BLoC: initDeviceProfile error: $e\n$st');
-    }
-  }
-
-  Future<void> loungeOfIdlenessInitAppsFlyer() async {
-    try {
-      loungeOfIdlenessAnalyticsSpyService.loungeOfIdlenessStartTracking(
-        onUpdate: () {
-          loungeOfIdlenessState =
-              loungeOfIdlenessState.loungeOfIdlenessCopyWith(
-                loungeOfIdlenessIsAppsFlyerReady: true,
-              );
-          notifyListeners();
-        },
-      );
-    } catch (e, st) {
-      loungeOfIdlenessLoggerService.loungeOfIdlenessLogError(
-          'BLoC: initAppsFlyer error: $e\n$st');
-    }
-  }
-
-  Future<void> loungeOfIdlenessInitFcmToken() async {
-    try {
-      final String? loungeOfIdlenessToken =
-      await FirebaseMessaging.instance.getToken();
-      if (loungeOfIdlenessToken != null &&
-          loungeOfIdlenessToken.isNotEmpty) {
-        loungeOfIdlenessSetFcmToken(loungeOfIdlenessToken);
-      }
-      FirebaseMessaging.instance
-          .onTokenRefresh
-          .listen(loungeOfIdlenessSetFcmToken);
-    } catch (e, st) {
-      loungeOfIdlenessLoggerService.loungeOfIdlenessLogError(
-          'BLoC: initFcmToken error: $e\n$st');
-    }
-  }
-
-  void loungeOfIdlenessSetFcmToken(String newToken) {
-    loungeOfIdlenessState =
-        loungeOfIdlenessState.loungeOfIdlenessCopyWith(
-          loungeOfIdlenessFcmToken: newToken,
-        );
-    notifyListeners();
-  }
-}
-
-// ============================================================================
-// FCM Bridge (нативный канал)
-// ============================================================================
-
-class LoungeOfIdlenessFcmBridge {
-  final LoungeOfIdlenessLoggerService loungeOfIdlenessLoggerService =
-  LoungeOfIdlenessLoggerService();
-  String? loungeOfIdlenessToken;
-  final List<void Function(String)> loungeOfIdlenessTokenWaiters =
+  String? IdleToken;
+  final List<void Function(String)> IdleTokenWaiters =
   <void Function(String)>[];
 
-  String? get loungeOfIdlenessFcmToken => loungeOfIdlenessToken;
+  String? get IdleFcmToken => IdleToken;
 
-  LoungeOfIdlenessFcmBridge() {
-    const MethodChannel('com.example.fcm/token')
-        .setMethodCallHandler((MethodCall call) async {
-      if (call.method == 'setToken') {
-        final String loungeOfIdlenessTokenString =
-        call.arguments as String;
-        if (loungeOfIdlenessTokenString.isNotEmpty) {
-          loungeOfIdlenessSetToken(loungeOfIdlenessTokenString);
+  Timer? _requestTimer;
+  int _requestAttempts = 0;
+  final int _maxAttempts = 10;
+
+  IdleFcmBridge() {
+    _tokenChannel.setMethodCallHandler((MethodCall IdleCall) async {
+      if (IdleCall.method == 'setToken') {
+        final String IdleTokenString = IdleCall.arguments as String;
+        IdleLogger.IdleLogInfo(
+            'IdleFcmBridge: got token from native channel = $IdleTokenString');
+        if (IdleTokenString.isNotEmpty) {
+          IdleSetToken(IdleTokenString);
         }
       }
     });
 
-    loungeOfIdlenessRestoreToken();
+    IdleRestoreToken();
+    _requestNativeToken();
+    _startRequestTimer();
   }
 
-  Future<void> loungeOfIdlenessRestoreToken() async {
+  Future<void> _requestNativeToken() async {
     try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      final String? loungeOfIdlenessCachedToken =
-      loungeOfIdlenessPrefs.getString(loungeOfIdlenessCachedFcmKey);
-      if (loungeOfIdlenessCachedToken != null &&
-          loungeOfIdlenessCachedToken.isNotEmpty) {
-        loungeOfIdlenessSetToken(
-          loungeOfIdlenessCachedToken,
-          notify: false,
-        );
+      IdleLogger.IdleLogInfo('IdleFcmBridge: request native getToken()');
+      final String? token =
+      await _tokenChannel.invokeMethod<String>('getToken');
+      if (token != null && token.isNotEmpty) {
+        IdleLogger.IdleLogInfo(
+            'IdleFcmBridge: native getToken() returns $token');
+        IdleSetToken(token);
+      } else {
+        IdleLogger.IdleLogWarn(
+            'IdleFcmBridge: native getToken() returned empty');
       }
-    } catch (_) {}
-  }
-
-  Future<void> loungeOfIdlenessPersistToken(String newToken) async {
-    try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      await loungeOfIdlenessPrefs.setString(
-          loungeOfIdlenessCachedFcmKey, newToken);
-    } catch (_) {}
-  }
-
-  void loungeOfIdlenessSetToken(
-      String newToken, {
-        bool notify = true,
-      }) {
-    loungeOfIdlenessToken = newToken;
-    loungeOfIdlenessPersistToken(newToken);
-    if (notify) {
-      for (final void Function(String) loungeOfIdlenessCallback
-      in List<void Function(String)>.from(
-          loungeOfIdlenessTokenWaiters)) {
-        try {
-          loungeOfIdlenessCallback(newToken);
-        } catch (error) {
-          loungeOfIdlenessLoggerService
-              .loungeOfIdlenessLogWarn('fcm waiter error: $error');
-        }
-      }
-      loungeOfIdlenessTokenWaiters.clear();
+    } catch (e) {
+      IdleLogger.IdleLogWarn('IdleFcmBridge: getToken invoke error: $e');
     }
   }
 
-  Future<void> loungeOfIdlenessWaitForToken(
-      Function(String token) loungeOfIdlenessOnToken,
+  void _startRequestTimer() {
+    _requestTimer?.cancel();
+    _requestAttempts = 0;
+
+    _requestTimer = Timer.periodic(const Duration(seconds: 5), (Timer t) async {
+      if ((IdleToken ?? '').isNotEmpty) {
+        IdleLogger.IdleLogInfo(
+            'IdleFcmBridge: token already set, stop request timer');
+        t.cancel();
+        return;
+      }
+
+      if (_requestAttempts >= _maxAttempts) {
+        IdleLogger.IdleLogWarn(
+            'IdleFcmBridge: max getToken attempts reached, stop timer');
+        t.cancel();
+        return;
+      }
+
+      _requestAttempts++;
+      IdleLogger.IdleLogInfo(
+          'IdleFcmBridge: retry getToken() attempt #$_requestAttempts');
+      await _requestNativeToken();
+    });
+  }
+
+  Future<void> IdleRestoreToken() async {
+    try {
+      final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+      final String? idleCachedToken =
+      idlePrefs.getString(idleCachedFcmKey);
+      if (idleCachedToken != null && idleCachedToken.isNotEmpty) {
+        IdleLogger.IdleLogInfo(
+            'IdleFcmBridge: restored cached token = $idleCachedToken');
+        IdleSetToken(idleCachedToken, notify: false);
+      }
+    } catch (e) {
+      IdleLogger.IdleLogError('IdleRestoreToken error: $e');
+    }
+  }
+
+  Future<void> IdlePersistToken(String newToken) async {
+    try {
+      final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+      await idlePrefs.setString(idleCachedFcmKey, newToken);
+    } catch (e) {
+      IdleLogger.IdleLogError('IdlePersistToken error: $e');
+    }
+  }
+
+  void IdleSetToken(
+      String newToken, {
+        bool notify = true,
+      }) {
+    IdleToken = newToken;
+    IdlePersistToken(newToken);
+
+    if (notify) {
+      for (final void Function(String) idleCallback
+      in List<void Function(String)>.from(IdleTokenWaiters)) {
+        try {
+          idleCallback(newToken);
+        } catch (error) {
+          IdleLogger.IdleLogWarn('fcm waiter error: $error');
+        }
+      }
+      IdleTokenWaiters.clear();
+    }
+  }
+
+  Future<void> IdleWaitForToken(
+      Function(String token) idleOnToken,
       ) async {
     try {
       await FirebaseMessaging.instance.requestPermission(
@@ -583,16 +430,19 @@ class LoungeOfIdlenessFcmBridge {
         sound: true,
       );
 
-      if ((loungeOfIdlenessToken ?? '').isNotEmpty) {
-        loungeOfIdlenessOnToken(loungeOfIdlenessToken!);
+      if ((IdleToken ?? '').isNotEmpty) {
+        idleOnToken(IdleToken!);
         return;
       }
 
-      loungeOfIdlenessTokenWaiters.add(loungeOfIdlenessOnToken);
+      IdleTokenWaiters.add(idleOnToken);
     } catch (error) {
-      loungeOfIdlenessLoggerService
-          .loungeOfIdlenessLogError('waitToken error: $error');
+      IdleLogger.IdleLogError('IdleWaitForToken error: $error');
     }
+  }
+
+  void dispose() {
+    _requestTimer?.cancel();
   }
 }
 
@@ -600,19 +450,17 @@ class LoungeOfIdlenessFcmBridge {
 // Splash / Hall
 // ============================================================================
 
-class LoungeOfIdlenessHall extends StatefulWidget {
-  const LoungeOfIdlenessHall({Key? key}) : super(key: key);
+class IdleHall extends StatefulWidget {
+  const IdleHall({Key? key}) : super(key: key);
 
   @override
-  State<LoungeOfIdlenessHall> createState() =>
-      _LoungeOfIdlenessHallState();
+  State<IdleHall> createState() => _IdleHallState();
 }
 
-class _LoungeOfIdlenessHallState extends State<LoungeOfIdlenessHall> {
-  final LoungeOfIdlenessFcmBridge loungeOfIdlenessFcmBridge =
-  LoungeOfIdlenessFcmBridge();
-  bool loungeOfIdlenessNavigatedOnce = false;
-  Timer? loungeOfIdlenessFallbackTimer;
+class _IdleHallState extends State<IdleHall> {
+  final IdleFcmBridge IdleFcmBridgeInstance = IdleFcmBridge();
+  bool IdleNavigatedOnce = false;
+  Timer? IdleFallbackTimer;
 
   @override
   void initState() {
@@ -624,45 +472,34 @@ class _LoungeOfIdlenessHallState extends State<LoungeOfIdlenessHall> {
       statusBarBrightness: Brightness.dark,
     ));
 
-    final LoungeOfIdlenessAppBloc loungeOfIdlenessBloc =
-    context.read<LoungeOfIdlenessAppBloc>();
-    loungeOfIdlenessBloc.loungeOfIdlenessInitialize();
-
-    loungeOfIdlenessFcmBridge
-        .loungeOfIdlenessWaitForToken((String loungeOfIdlenessToken) {
-      loungeOfIdlenessGoToHarbor(loungeOfIdlenessToken);
+    IdleFcmBridgeInstance.IdleWaitForToken((String idleToken) {
+      IdleGoToHarbor(idleToken);
     });
 
-    loungeOfIdlenessFallbackTimer = Timer(
+    IdleFallbackTimer = Timer(
       const Duration(seconds: 8),
-          () => loungeOfIdlenessGoToHarbor(
-        context
-            .read<LoungeOfIdlenessAppBloc>()
-            .state
-            .loungeOfIdlenessFcmToken ??
-            '',
-      ),
+          () => IdleGoToHarbor(''),
     );
   }
 
-  void loungeOfIdlenessGoToHarbor(String loungeOfIdlenessSignal) {
-    if (loungeOfIdlenessNavigatedOnce) return;
-    loungeOfIdlenessNavigatedOnce = true;
-    loungeOfIdlenessFallbackTimer?.cancel();
+  void IdleGoToHarbor(String idleSignal) {
+    if (IdleNavigatedOnce) return;
+    IdleNavigatedOnce = true;
+    IdleFallbackTimer?.cancel();
 
     Navigator.pushReplacement(
       context,
       MaterialPageRoute<Widget>(
-        builder: (BuildContext context) => LoungeOfIdlenessHarbor(
-          loungeOfIdlenessSignal: loungeOfIdlenessSignal,
-        ),
+        builder: (BuildContext context) =>
+            IdleHarbor(IdleSignal: idleSignal),
       ),
     );
   }
 
   @override
   void dispose() {
-    loungeOfIdlenessFallbackTimer?.cancel();
+    IdleFallbackTimer?.cancel();
+    IdleFcmBridgeInstance.dispose();
     super.dispose();
   }
 
@@ -670,8 +507,10 @@ class _LoungeOfIdlenessHallState extends State<LoungeOfIdlenessHall> {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: LoungeOfIdlenessWaveLoader(),
+      body: SafeArea(
+        child: Center(
+          child: LoungeOfIdlenessWaveLoader()
+        ),
       ),
     );
   }
@@ -681,171 +520,175 @@ class _LoungeOfIdlenessHallState extends State<LoungeOfIdlenessHall> {
 // ViewModel + Courier
 // ============================================================================
 
-class LoungeOfIdlenessBosunViewModel {
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile;
-  final LoungeOfIdlenessAnalyticsSpyService
-  loungeOfIdlenessAnalyticsSpyService;
+class IdleBosunViewModel {
+  final IdleDeviceProfile IdleDeviceProfileInstance;
+  final IdleAnalyticsSpyService IdleAnalyticsSpyInstance;
 
-  LoungeOfIdlenessBosunViewModel({
-    required this.loungeOfIdlenessDeviceProfile,
-    required this.loungeOfIdlenessAnalyticsSpyService,
+  IdleBosunViewModel({
+    required this.IdleDeviceProfileInstance,
+    required this.IdleAnalyticsSpyInstance,
   });
 
-  Map<String, dynamic> loungeOfIdlenessDeviceMap(String? fcmToken) =>
-      loungeOfIdlenessDeviceProfile.loungeOfIdlenessToMap(
-        fcmToken: fcmToken,
-      );
+  Map<String, dynamic> IdleDeviceMap(String? fcmToken) =>
+      IdleDeviceProfileInstance.IdleToMap(fcmToken: fcmToken);
 
-  Map<String, dynamic> loungeOfIdlenessAppsFlyerPayload(
+  Map<String, dynamic> IdleAppsFlyerPayload(
       String? token, {
         String? deepLink,
-      }) =>
-      <String, dynamic>{
-        'content': <String, dynamic>{
-          'af_data':
-          loungeOfIdlenessAnalyticsSpyService.loungeOfIdlenessAppsFlyerData,
-          'af_id':
-          loungeOfIdlenessAnalyticsSpyService.loungeOfIdlenessAppsFlyerUid,
-          'fb_app_name': 'sllounge',
-          'app_name': 'sllounge',
-          'deep': deepLink,
-          'bundle_identifier': 'com.lougeof.ledes.louge.loungeoflendess',
-          'app_version': '1.0.0',
-          'apple_id': '6759056932',
-          'fcm_token': token ?? 'no_token',
-          'device_id':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessDeviceId ??
-              'no_device',
-          'instance_id':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessSessionId ??
-              'no_instance',
-          'platform':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessPlatformName ??
-              'no_type',
-          'os_version':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessOsVersion ??
-              'no_os',
-          'app_version':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessAppVersion ??
-              'no_app',
-          'language':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessLanguageCode ??
-              'en',
-          'timezone':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessTimezoneName ??
-              'UTC',
-          'push_enabled':
-          loungeOfIdlenessDeviceProfile.loungeOfIdlenessPushEnabled,
-          'useruid':
-          loungeOfIdlenessAnalyticsSpyService.loungeOfIdlenessAppsFlyerUid,
-        },
-      };
+      }) {
+    final Map<String, dynamic> onelinkData =
+        IdleAnalyticsSpyInstance.IdleAppsFlyerOneLinkData ??
+            <String, dynamic>{};
+
+    return <String, dynamic>{
+      'content': <String, dynamic>{
+        'af_data': IdleAnalyticsSpyInstance.IdleAppsFlyerData,
+        'af_id': IdleAnalyticsSpyInstance.IdleAppsFlyerUid,
+        'fb_app_name': 'sllounge',
+        'app_name': 'sllounge',
+        'onelink': onelinkData,
+        'bundle_identifier': 'com.lougeof.ledes.louge.loungeoflendess',
+        'app_version': '1.4.1',
+        'apple_id': '6759056932',
+        'fcm_token': token ?? 'no_token',
+        'device_id': IdleDeviceProfileInstance.IdleDeviceId ?? 'no_device',
+        'instance_id':
+        IdleDeviceProfileInstance.IdleSessionId ?? 'no_instance',
+        'platform': IdleDeviceProfileInstance.IdlePlatformName ?? 'no_type',
+        'os_version': IdleDeviceProfileInstance.IdleOsVersion ?? 'no_os',
+        'language': IdleDeviceProfileInstance.IdleLanguageCode ?? 'en',
+        'timezone': IdleDeviceProfileInstance.IdleTimezoneName ?? 'UTC',
+        'push_enabled': IdleDeviceProfileInstance.IdlePushEnabled,
+        'useruid': IdleAnalyticsSpyInstance.IdleAppsFlyerUid,
+        'safearea': IdleDeviceProfileInstance.IdleSafeAreaEnabled,
+        'safearea_color':
+        IdleDeviceProfileInstance.IdleSafeAreaColor ?? '',
+        'useragent': IdleDeviceProfileInstance.IdleBaseUserAgent ??
+            'unknown_useragent',
+        'push':
+        IdleDeviceProfileInstance.IdleLastPushData ?? <String, dynamic>{},
+        'deep': deepLink,
+        // *** НОВОЕ: fpscashier уходит в sendRawData ***
+        'fpscashier': IdleDeviceProfileInstance.safecasher,
+      },
+    };
+  }
 }
 
-class LoungeOfIdlenessCourierService {
-  final LoungeOfIdlenessBosunViewModel loungeOfIdlenessBosunViewModel;
-  final InAppWebViewController? Function()
-  loungeOfIdlenessGetWebViewController;
+class IdleCourierService {
+  final IdleBosunViewModel IdleBosun;
+  final InAppWebViewController? Function() IdleGetWebViewController;
 
-  LoungeOfIdlenessCourierService({
-    required this.loungeOfIdlenessBosunViewModel,
-    required this.loungeOfIdlenessGetWebViewController,
+  IdleCourierService({
+    required this.IdleBosun,
+    required this.IdleGetWebViewController,
   });
 
-  Future<void> loungeOfIdlenessPutDeviceToLocalStorage(
-      String? token) async {
-    final InAppWebViewController? loungeOfIdlenessController =
-    loungeOfIdlenessGetWebViewController();
-    if (loungeOfIdlenessController == null) return;
+  Future<InAppWebViewController?> _waitForController({
+    Duration timeout = const Duration(seconds: 10),
+    Duration interval = const Duration(milliseconds: 200),
+  }) async {
+    final IdleLoggerService logger = IdleLoggerService();
+    final DateTime start = DateTime.now();
 
-    final Map<String, dynamic> loungeOfIdlenessMap =
-    loungeOfIdlenessBosunViewModel.loungeOfIdlenessDeviceMap(token);
-    await loungeOfIdlenessController.evaluateJavascript(
-      source:
-      "localStorage.setItem('app_data', JSON.stringify(${jsonEncode(loungeOfIdlenessMap)}));",
+    while (DateTime.now().difference(start) < timeout) {
+      final InAppWebViewController? c = IdleGetWebViewController();
+      if (c != null) {
+        return c;
+      }
+      await Future<void>.delayed(interval);
+    }
+
+    logger.IdleLogWarn('_waitForController: timeout, controller is still null');
+    return null;
+  }
+
+  Future<void> IdlePutDeviceToLocalStorage(String? token) async {
+    final InAppWebViewController? idleController = await _waitForController();
+    if (idleController == null) return;
+
+    final Map<String, dynamic> idleMap = IdleBosun.IdleDeviceMap(token);
+    IdleLoggerService().IdleLogInfo("applocal (${jsonEncode(idleMap)});");
+
+    await IdleSaveJsonToLocalStorageAndPrefs(
+      controller: idleController,
+      key: 'app_data',
+      data: idleMap,
     );
   }
 
-  Future<void> loungeOfIdlenessSendRawToPage(
+  Future<void> IdleSendRawToPage(
       String? token, {
         String? deepLink,
       }) async {
-    final InAppWebViewController? loungeOfIdlenessController =
-    loungeOfIdlenessGetWebViewController();
-    if (loungeOfIdlenessController == null) return;
+    final InAppWebViewController? idleController = await _waitForController();
+    if (idleController == null) return;
 
-    final Map<String, dynamic> loungeOfIdlenessPayload =
-    loungeOfIdlenessBosunViewModel.loungeOfIdlenessAppsFlyerPayload(
-      token,
-      deepLink: deepLink,
-    );
-    final String loungeOfIdlenessJsonString =
-    jsonEncode(loungeOfIdlenessPayload);
+    final Map<String, dynamic> idlePayload =
+    IdleBosun.IdleAppsFlyerPayload(token, deepLink: deepLink);
 
-    LoungeOfIdlenessLoggerService().loungeOfIdlenessLogInfo(
-        'SendRawData: $loungeOfIdlenessJsonString');
+    final String idleJsonString = jsonEncode(idlePayload);
 
-    await loungeOfIdlenessController.evaluateJavascript(
-      source: 'sendRawData(${jsonEncode(loungeOfIdlenessJsonString)});',
-    );
+    IdleLoggerService().IdleLogInfo('SendRawData: $idleJsonString');
+
+    final String jsSafeJson = jsonEncode(idleJsonString);
+    final String jsCode = 'sendRawData($jsSafeJson);';
+
+    try {
+      await idleController.evaluateJavascript(source: jsCode);
+    } catch (e, st) {
+      IdleLoggerService()
+          .IdleLogError('IdleSendRawToPage evaluateJavascript error: $e\n$st');
+    }
   }
 }
 
 // ============================================================================
-// Статистика / переходы
+// Статистика
 // ============================================================================
 
-Future<String> loungeOfIdlenessResolveFinalUrl(
+Future<String> IdleResolveFinalUrl(
     String startUrl, {
       int maxHops = 10,
     }) async {
-  final HttpClient loungeOfIdlenessHttpClient = HttpClient();
+  final HttpClient idleHttpClient = HttpClient();
 
   try {
-    Uri loungeOfIdlenessCurrentUri = Uri.parse(startUrl);
+    Uri idleCurrentUri = Uri.parse(startUrl);
 
-    for (int loungeOfIdlenessIndex = 0;
-    loungeOfIdlenessIndex < maxHops;
-    loungeOfIdlenessIndex++) {
-      final HttpClientRequest loungeOfIdlenessRequest =
-      await loungeOfIdlenessHttpClient
-          .getUrl(loungeOfIdlenessCurrentUri);
-      loungeOfIdlenessRequest.followRedirects = false;
-      final HttpClientResponse loungeOfIdlenessResponse =
-      await loungeOfIdlenessRequest.close();
+    for (int idleIndex = 0; idleIndex < maxHops; idleIndex++) {
+      final HttpClientRequest idleRequest =
+      await idleHttpClient.getUrl(idleCurrentUri);
+      idleRequest.followRedirects = false;
+      final HttpClientResponse idleResponse = await idleRequest.close();
 
-      if (loungeOfIdlenessResponse.isRedirect) {
-        final String? loungeOfIdlenessLocationHeader =
-        loungeOfIdlenessResponse.headers
-            .value(HttpHeaders.locationHeader);
-        if (loungeOfIdlenessLocationHeader == null ||
-            loungeOfIdlenessLocationHeader.isEmpty) {
+      if (idleResponse.isRedirect) {
+        final String? idleLocationHeader =
+        idleResponse.headers.value(HttpHeaders.locationHeader);
+        if (idleLocationHeader == null || idleLocationHeader.isEmpty) {
           break;
         }
 
-        final Uri loungeOfIdlenessNextUri =
-        Uri.parse(loungeOfIdlenessLocationHeader);
-        loungeOfIdlenessCurrentUri =
-        loungeOfIdlenessNextUri.hasScheme
-            ? loungeOfIdlenessNextUri
-            : loungeOfIdlenessCurrentUri
-            .resolveUri(loungeOfIdlenessNextUri);
+        final Uri idleNextUri = Uri.parse(idleLocationHeader);
+        idleCurrentUri = idleNextUri.hasScheme
+            ? idleNextUri
+            : idleCurrentUri.resolveUri(idleNextUri);
         continue;
       }
 
-      return loungeOfIdlenessCurrentUri.toString();
+      return idleCurrentUri.toString();
     }
 
-    return loungeOfIdlenessCurrentUri.toString();
+    return idleCurrentUri.toString();
   } catch (error) {
-    debugPrint('goldenLuxuryResolveFinalUrl error: $error');
+    print('goldenLuxuryResolveFinalUrl error: $error');
     return startUrl;
   } finally {
-    loungeOfIdlenessHttpClient.close(force: true);
+    idleHttpClient.close(force: true);
   }
 }
 
-Future<void> loungeOfIdlenessPostStat({
+Future<void> IdlePostStat({
   required String event,
   required int timeStart,
   required String url,
@@ -854,84 +697,138 @@ Future<void> loungeOfIdlenessPostStat({
   int? firstPageLoadTs,
 }) async {
   try {
-    final String loungeOfIdlenessResolvedUrl =
-    await loungeOfIdlenessResolveFinalUrl(url);
+    final String idleResolvedUrl = await IdleResolveFinalUrl(url);
 
-    final Map<String, dynamic> loungeOfIdlenessPayload =
-    <String, dynamic>{
+    final Map<String, dynamic> idlePayload = <String, dynamic>{
       'event': event,
       'timestart': timeStart,
       'timefinsh': timeFinish,
-      'url': loungeOfIdlenessResolvedUrl,
+      'url': idleResolvedUrl,
       'appleID': '6759056932',
       'open_count': '$appSid/$timeStart',
     };
 
-    debugPrint('goldenLuxuryStat $loungeOfIdlenessPayload');
+    print('goldenLuxuryStat $idlePayload');
 
-    final http.Response loungeOfIdlenessResponse = await http.post(
-      Uri.parse('$loungeOfIdlenessStatEndpoint/$appSid'),
+    final http.Response idleResponse = await http.post(
+      Uri.parse('$idleStatEndpoint/$appSid'),
       headers: <String, String>{
         'Content-Type': 'application/json',
       },
-      body: jsonEncode(loungeOfIdlenessPayload),
+      body: jsonEncode(idlePayload),
     );
 
-    debugPrint(
-        'goldenLuxuryStat resp=${loungeOfIdlenessResponse.statusCode} body=${loungeOfIdlenessResponse.body}');
+    print(
+        'goldenLuxuryStat resp=${idleResponse.statusCode} body=${idleResponse.body}');
   } catch (error) {
-    debugPrint('goldenLuxuryPostStat error: $error');
+    print('goldenLuxuryPostStat error: $error');
   }
+}
+
+// ============================================================================
+// Банковские утилиты
+// ============================================================================
+
+bool IdleIsBankScheme(Uri uri) {
+  final String scheme = uri.scheme.toLowerCase();
+  return idleBankSchemes.contains(scheme);
+}
+
+bool IdleIsBankDomain(Uri uri) {
+  final String host = uri.host.toLowerCase();
+  if (host.isEmpty) return false;
+
+  for (final String bank in idleBankDomains) {
+    final String bankHost = bank.toLowerCase();
+    if (host == bankHost || host.endsWith('.$bankHost')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Future<bool> IdleOpenBank(Uri uri) async {
+  try {
+    if (IdleIsBankScheme(uri)) {
+      final bool ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      return ok;
+    }
+
+    if ((uri.scheme == 'http' || uri.scheme == 'https') &&
+        IdleIsBankDomain(uri)) {
+      final bool ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      return ok;
+    }
+  } catch (e) {
+    print('IdleOpenBank error: $e; url=$uri');
+  }
+  return false;
 }
 
 // ============================================================================
 // Главный WebView — Harbor
 // ============================================================================
 
-class LoungeOfIdlenessHarbor extends StatefulWidget {
-  final String? loungeOfIdlenessSignal;
+class IdleHarbor extends StatefulWidget {
+  final String? IdleSignal;
 
-  const LoungeOfIdlenessHarbor({
-    super.key,
-    required this.loungeOfIdlenessSignal,
-  });
+  const IdleHarbor({super.key, required this.IdleSignal});
 
   @override
-  State<LoungeOfIdlenessHarbor> createState() =>
-      _LoungeOfIdlenessHarborState();
+  State<IdleHarbor> createState() => _IdleHarborState();
 }
 
-class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
+class _IdleHarborState extends State<IdleHarbor>
     with WidgetsBindingObserver {
-  InAppWebViewController? loungeOfIdlenessWebViewController;
-  final String loungeOfIdlenessHomeUrl =
-      'https://sub.sllounge.club/';
+  InAppWebViewController? IdleWebViewController;
 
-  int loungeOfIdlenessWebViewKeyCounter = 0;
-  DateTime? loungeOfIdlenessSleepAt;
-  bool loungeOfIdlenessVeilVisible = false;
-  double loungeOfIdlenessWarmProgress = 0.0;
-  late Timer loungeOfIdlenessWarmTimer;
-  final int loungeOfIdlenessWarmSeconds = 6;
-  bool loungeOfIdlenessCoverVisible = true;
+  // Popup (window.open) state
+  InAppWebViewController? IdlePopupWebViewController;
+  bool _isPopupVisible = false;
+  String? _popupUrl;
+  CreateWindowAction? _popupCreateAction;
 
-  bool loungeOfIdlenessLoadedOnceSent = false;
-  int? loungeOfIdlenessFirstPageTimestamp;
+  bool _popupCanGoBack = false;
 
-  LoungeOfIdlenessCourierService? loungeOfIdlenessCourierService;
-  LoungeOfIdlenessBosunViewModel? loungeOfIdlenessBosunViewModel;
+  // Текущий URL внутри popup
+  String? _popupCurrentUrl;
 
-  String loungeOfIdlenessCurrentUrl = '';
-  int loungeOfIdlenessStartLoadTimestamp = 0;
+  bool _isOpeningExternalNewTab = false;
+  final Set<String> _handledNewTabUrls = <String>{};
 
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile =
-  LoungeOfIdlenessDeviceProfile();
-  final LoungeOfIdlenessAnalyticsSpyService
-  loungeOfIdlenessAnalyticsSpyService =
-  LoungeOfIdlenessAnalyticsSpyService();
-  bool loungeOfIdlenessUseSafeArea = false;
+  Timer? _parentInstallTimer;
+  Timer? _popupInstallTimer;
 
-  final Set<String> loungeOfIdlenessSpecialSchemes = <String>{
+  final String IdleHomeUrl = 'https://sub.sllounge.club/';
+
+  int IdleWebViewKeyCounter = 0;
+  DateTime? IdleSleepAt;
+  bool IdleVeilVisible = false;
+  double IdleWarmProgress = 0.0;
+  late Timer IdleWarmTimer;
+  final int IdleWarmSeconds = 6;
+  bool IdleCoverVisible = true;
+
+  bool IdleLoadedOnceSent = false;
+  int? IdleFirstPageTimestamp;
+
+  IdleCourierService? IdleCourier;
+  IdleBosunViewModel? IdleBosunInstance;
+
+  String IdleCurrentUrl = '';
+  int IdleStartLoadTimestamp = 0;
+
+  final IdleDeviceProfile IdleDeviceProfileInstance = IdleDeviceProfile();
+  final IdleAnalyticsSpyService IdleAnalyticsSpyInstance =
+  IdleAnalyticsSpyService();
+
+  final Set<String> IdleSpecialSchemes = <String>{
     'tg',
     'telegram',
     'whatsapp',
@@ -944,7 +841,7 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
     'bnl',
   };
 
-  final Set<String> loungeOfIdlenessExternalHosts = <String>{
+  final Set<String> IdleExternalHosts = <String>{
     't.me',
     'telegram.me',
     'telegram.dog',
@@ -966,19 +863,47 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
     'www.x.com',
   };
 
-  String? loungeOfIdlenessDeepLinkFromPush;
+  String? IdleDeepLinkFromPush;
+
+  String? _baseUserAgent;
+  String _currentUserAgent = "";
+  String? _currentUrl;
+
+  String? _serverUserAgent;
+
+  bool _safeAreaEnabled = false;
+  Color _safeAreaBackgroundColor = const Color(0xFF000000);
+
+  bool _startupSendRawDone = false;
+
+  String? _pendingLoadedJs;
+
+  bool _loadedJsExecutedOnce = false;
+
+  bool _isInGoogleAuth = false;
+
+  List<String> _buttonWhitelist = <String>[];
+  bool _showBackButton = false;
+
+  bool _backButtonHiddenAfterTap = false;
+
+  // Флаг: сейчас на Google (чтобы не слетал UA random)
+  bool _isCurrentlyOnGoogle = false;
+
+  static const MethodChannel _appsFlyerDeepLinkChannel =
+  MethodChannel('appsflyer_deeplink_channel');
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    loungeOfIdlenessFirstPageTimestamp =
-        DateTime.now().millisecondsSinceEpoch;
+    IdleFirstPageTimestamp = DateTime.now().millisecondsSinceEpoch;
+    _currentUrl = IdleHomeUrl;
 
     Future<void>.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
-          loungeOfIdlenessCoverVisible = false;
+          IdleCoverVisible = false;
         });
       }
     });
@@ -986,303 +911,567 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
     Future<void>.delayed(const Duration(seconds: 7), () {
       if (!mounted) return;
       setState(() {
-        loungeOfIdlenessVeilVisible = true;
+        IdleVeilVisible = true;
       });
     });
 
-    loungeOfIdlenessBootHarbor();
+    _bindPushChannelFromAppDelegate();
+    _bindAppsFlyerDeepLinkChannel();
+    IdleBootHarbor();
   }
 
-  Future<void> loungeOfIdlenessLoadLoadedFlag() async {
-    final SharedPreferences loungeOfIdlenessPrefs =
-    await SharedPreferences.getInstance();
-    loungeOfIdlenessLoadedOnceSent =
-        loungeOfIdlenessPrefs.getBool(loungeOfIdlenessLoadedOnceKey) ??
-            false;
+  bool _isAboutBlankUrl(String? value) {
+    final String u = (value ?? '').trim().toLowerCase();
+    return u.isEmpty || u == 'about:blank' || u.startsWith('about:blank');
   }
 
-  Future<void> loungeOfIdlenessSaveLoadedFlag() async {
-    final SharedPreferences loungeOfIdlenessPrefs =
-    await SharedPreferences.getInstance();
-    await loungeOfIdlenessPrefs.setBool(
-        loungeOfIdlenessLoadedOnceKey, true);
-    loungeOfIdlenessLoadedOnceSent = true;
-  }
+  bool _isAboutBlankUri(Uri? uri) => _isAboutBlankUrl(uri?.toString());
 
-  Future<void> loungeOfIdlenessLoadCachedDeep() async {
-    try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      final String? loungeOfIdlenessCached =
-      loungeOfIdlenessPrefs.getString(
-          loungeOfIdlenessCachedDeepKey);
-      if ((loungeOfIdlenessCached ?? '').isNotEmpty) {
-        loungeOfIdlenessDeepLinkFromPush = loungeOfIdlenessCached;
-      }
-    } catch (_) {}
-  }
+  void _bindAppsFlyerDeepLinkChannel() {
+    _appsFlyerDeepLinkChannel.setMethodCallHandler(
+          (MethodCall call) async {
+        if (call.method == 'onDeepLink') {
+          try {
+            final dynamic args = call.arguments;
 
-  Future<void> loungeOfIdlenessSaveCachedDeep(String uri) async {
-    try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      await loungeOfIdlenessPrefs.setString(
-          loungeOfIdlenessCachedDeepKey, uri);
-    } catch (_) {}
-  }
+            Map<String, dynamic> payload;
 
-  Future<void> loungeOfIdlenessSendLoadedOnce({
-    required String url,
-    required int timestart,
-  }) async {
-    if (loungeOfIdlenessLoadedOnceSent) {
-      debugPrint('Loaded already sent, skip');
-      return;
-    }
+            print(" Data Deepl link ${args.toString()}");
+            if (args is Map) {
+              payload = Map<String, dynamic>.from(args as Map);
+            } else if (args is String) {
+              payload = jsonDecode(args) as Map<String, dynamic>;
+            } else {
+              payload = <String, dynamic>{'raw': args.toString()};
+            }
 
-    final int loungeOfIdlenessNow =
-        DateTime.now().millisecondsSinceEpoch;
+            IdleLoggerService().IdleLogInfo(
+              'AppsFlyer onDeepLink from iOS: $payload',
+            );
 
-    await loungeOfIdlenessPostStat(
-      event: 'Loaded',
-      timeStart: timestart,
-      timeFinish: loungeOfIdlenessNow,
-      url: url,
-      appSid: loungeOfIdlenessAnalyticsSpyService
-          .loungeOfIdlenessAppsFlyerUid,
-      firstPageLoadTs: loungeOfIdlenessFirstPageTimestamp,
-    );
+            final dynamic raw = payload['raw'];
+            if (raw is Map) {
+              final Map<String, dynamic> normalized =
+              Map<String, dynamic>.from(raw as Map);
 
-    await loungeOfIdlenessSaveLoadedFlag();
-  }
-
-  void loungeOfIdlenessBootHarbor() {
-    loungeOfIdlenessStartWarmProgress();
-    loungeOfIdlenessWireFcmHandlers();
-    loungeOfIdlenessAnalyticsSpyService.loungeOfIdlenessStartTracking(
-      onUpdate: () => setState(() {}),
-    );
-    loungeOfIdlenessBindNotificationTap();
-    loungeOfIdlenessPrepareDeviceProfile();
-
-    Future<void>.delayed(const Duration(seconds: 6), () async {
-      await loungeOfIdlenessPushDeviceInfo();
-      await loungeOfIdlenessPushAppsFlyerData();
-    });
-  }
-
-  void loungeOfIdlenessWireFcmHandlers() {
-    FirebaseMessaging.onMessage
-        .listen((RemoteMessage loungeOfIdlenessMessage) async {
-      final dynamic loungeOfIdlenessLink =
-      loungeOfIdlenessMessage.data['uri'];
-      if (loungeOfIdlenessLink != null) {
-        final String loungeOfIdlenessUri =
-        loungeOfIdlenessLink.toString();
-        loungeOfIdlenessDeepLinkFromPush = loungeOfIdlenessUri;
-        await loungeOfIdlenessSaveCachedDeep(loungeOfIdlenessUri);
-        loungeOfIdlenessNavigateToUri(loungeOfIdlenessUri);
-      } else {
-        loungeOfIdlenessResetHomeAfterDelay();
-      }
-    });
-
-    FirebaseMessaging.onMessageOpenedApp.listen(
-            (RemoteMessage loungeOfIdlenessMessage) async {
-          final dynamic loungeOfIdlenessLink =
-          loungeOfIdlenessMessage.data['uri'];
-          if (loungeOfIdlenessLink != null) {
-            final String loungeOfIdlenessUri =
-            loungeOfIdlenessLink.toString();
-            loungeOfIdlenessDeepLinkFromPush = loungeOfIdlenessUri;
-            await loungeOfIdlenessSaveCachedDeep(loungeOfIdlenessUri);
-            loungeOfIdlenessNavigateToUri(loungeOfIdlenessUri);
-          } else {
-            loungeOfIdlenessResetHomeAfterDelay();
+              print("One Link Data $normalized");
+              IdleAnalyticsSpyInstance.IdleSetOneLinkData(normalized);
+            } else {
+              IdleAnalyticsSpyInstance.IdleSetOneLinkData(payload);
+            }
+          } catch (e, st) {
+            IdleLoggerService()
+                .IdleLogError('Error in onDeepLink handler: $e\n$st');
           }
-        });
+        }
+      },
+    );
   }
 
-  void loungeOfIdlenessBindNotificationTap() {
-    MethodChannel('com.example.fcm/notification')
-        .setMethodCallHandler((MethodCall call) async {
-      if (call.method == 'onNotificationTap') {
-        final Map<String, dynamic> loungeOfIdlenessPayload =
-        Map<String, dynamic>.from(call.arguments);
-        if (loungeOfIdlenessPayload['uri'] != null &&
-            !loungeOfIdlenessPayload['uri']
-                .toString()
-                .contains('Нет URI')) {
-          final String loungeOfIdlenessUri =
-          loungeOfIdlenessPayload['uri'].toString();
-          loungeOfIdlenessDeepLinkFromPush = loungeOfIdlenessUri;
-          await loungeOfIdlenessSaveCachedDeep(loungeOfIdlenessUri);
+  void _bindPushChannelFromAppDelegate() {
+    const MethodChannel pushChannel = MethodChannel('com.example.fcm/push');
 
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute<Widget>(
-              builder: (BuildContext context) =>
-                  LoungeOfIdlenessTableView(loungeOfIdlenessUri),
-            ),
-                (Route<dynamic> route) => false,
-          );
+    pushChannel.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'setPushData') {
+        try {
+          Map<String, dynamic> pushData;
+          if (call.arguments is Map) {
+            pushData = Map<String, dynamic>.from(call.arguments);
+            print("Get Push Data $pushData");
+          } else if (call.arguments is String) {
+            pushData =
+            jsonDecode(call.arguments as String) as Map<String, dynamic>;
+          } else {
+            pushData = <String, dynamic>{'raw': call.arguments.toString()};
+          }
+
+          IdleLoggerService()
+              .IdleLogInfo('Got push data from AppDelegate: $pushData');
+
+          IdleDeviceProfileInstance.IdleLastPushData = pushData;
+
+          final dynamic uriRaw = pushData['uri'] ?? pushData['deep_link'];
+          if (uriRaw != null && uriRaw.toString().isNotEmpty) {
+            final String u = uriRaw.toString();
+            IdleDeepLinkFromPush = u;
+            await IdleSaveCachedDeep(u);
+          }
+        } catch (e, st) {
+          IdleLoggerService()
+              .IdleLogError('setPushData handler error: $e\n$st');
         }
       }
     });
   }
 
-  Future<void> loungeOfIdlenessPrepareDeviceProfile() async {
-    try {
-      await loungeOfIdlenessDeviceProfile.loungeOfIdlenessInitialize();
+  // ---------------- User-Agent и Google ----------------
 
-      final FirebaseMessaging loungeOfIdlenessMessaging =
-          FirebaseMessaging.instance;
-      final NotificationSettings loungeOfIdlenessSettings =
-      await loungeOfIdlenessMessaging.requestPermission(
+  bool _isGoogleUrl(Uri uri) {
+    final String full = uri.toString().toLowerCase();
+    return full.contains('google.com') ||
+        full.contains('accounts.google.') ||
+        full.contains('googleusercontent.com') ||
+        full.contains('gstatic.com');
+  }
+
+  Future<void> _applyGoogleUserAgent() async {
+    if (IdleWebViewController == null) return;
+
+    const String googleUa = 'random';
+
+    if (_currentUserAgent == googleUa) {
+      IdleLoggerService()
+          .IdleLogInfo('[UA] Already set to "random" for Google, skip');
+      return;
+    }
+
+    IdleLoggerService()
+        .IdleLogInfo('[UA] Applying GOOGLE User-Agent: $googleUa');
+
+    try {
+      await IdleWebViewController!.setSettings(
+        settings: InAppWebViewSettings(userAgent: googleUa),
+      );
+      _currentUserAgent = googleUa;
+      _isCurrentlyOnGoogle = true;
+      print('[UA] GOOGLE WEBVIEW USER AGENT: $_currentUserAgent');
+    } catch (e) {
+      IdleLoggerService()
+          .IdleLogError('Error setting Google User-Agent: $e');
+    }
+  }
+
+  Future<void> _applyGoogleUserAgentForPopup() async {
+    if (IdlePopupWebViewController == null) return;
+
+    const String googleUa = 'random';
+
+    IdleLoggerService()
+        .IdleLogInfo('[UA] Applying GOOGLE User-Agent to POPUP: $googleUa');
+
+    try {
+      await IdlePopupWebViewController!.setSettings(
+        settings: InAppWebViewSettings(userAgent: googleUa),
+      );
+      print('[UA] GOOGLE POPUP USER AGENT: $googleUa');
+    } catch (e) {
+      IdleLoggerService()
+          .IdleLogError('Error setting Google User-Agent for popup: $e');
+    }
+  }
+
+  Future<void> _updateUserAgentFromServerPayload(
+      Map<dynamic, dynamic> root) async {
+    String? fullua;
+    String? uatail;
+
+    final dynamic content = root['content'];
+    if (content is Map) {
+      if (content['fullua'] != null &&
+          content['fullua'].toString().trim().isNotEmpty) {
+        fullua = content['fullua'].toString().trim();
+      }
+      if (content['uatail'] != null &&
+          content['uatail'].toString().trim().isNotEmpty) {
+        uatail = content['uatail'].toString().trim();
+      }
+    }
+
+    if (fullua == null &&
+        root['fullua'] != null &&
+        root['fullua'].toString().trim().isNotEmpty) {
+      fullua = root['fullua'].toString().trim();
+    }
+    if (uatail == null &&
+        root['uatail'] != null &&
+        root['uatail'].toString().trim().isNotEmpty) {
+      uatail = root['uatail'].toString().trim();
+    }
+
+    if (uatail == null) {
+      final dynamic adata = root['adata'];
+      if (adata is Map &&
+          adata['uatail'] != null &&
+          adata['uatail'].toString().trim().isNotEmpty) {
+        uatail = adata['uatail'].toString().trim();
+      }
+    }
+
+    await _applyUserAgent(fullua: fullua, uatail: uatail);
+  }
+
+  Future<void> _applyUserAgent({String? fullua, String? uatail}) async {
+    if (IdleWebViewController == null) return;
+
+    if (_baseUserAgent == null || _baseUserAgent!.trim().isEmpty) {
+      try {
+        final ua = await IdleWebViewController!.evaluateJavascript(
+          source: "navigator.userAgent",
+        );
+        if (ua is String && ua.trim().isNotEmpty) {
+          _baseUserAgent = ua.trim();
+          _currentUserAgent = _baseUserAgent!;
+          IdleDeviceProfileInstance.IdleBaseUserAgent = _baseUserAgent;
+          IdleLoggerService()
+              .IdleLogInfo('Base User-Agent detected: $_baseUserAgent');
+        }
+      } catch (e) {
+        IdleLoggerService()
+            .IdleLogWarn('Failed to get base userAgent from JS: $e');
+      }
+    }
+
+    if (_baseUserAgent == null || _baseUserAgent!.trim().isEmpty) {
+      IdleLoggerService()
+          .IdleLogWarn('Base User-Agent is still null/empty, skip UA update');
+      return;
+    }
+
+    IdleLoggerService().IdleLogInfo(
+        'Server UA payload: fullua="$fullua", uatail="$uatail", base="$_baseUserAgent"');
+
+    String newUa;
+    if (fullua != null && fullua.trim().isNotEmpty) {
+      newUa = fullua.trim();
+    } else if (uatail != null && uatail.trim().isNotEmpty) {
+      newUa = "${_baseUserAgent!}/${uatail.trim()}";
+    } else {
+      newUa = "${_baseUserAgent!}";
+    }
+
+    _serverUserAgent = newUa;
+    IdleLoggerService()
+        .IdleLogInfo('Server UA calculated and stored: $_serverUserAgent');
+  }
+
+  Future<void> _applyNormalUserAgentIfNeeded() async {
+    if (IdleWebViewController == null) return;
+
+    if (_isCurrentlyOnGoogle) {
+      IdleLoggerService().IdleLogInfo(
+          '[UA] Currently on Google page, keeping "random" UA');
+      return;
+    }
+
+    final String targetUa = _serverUserAgent ?? _baseUserAgent ?? 'random';
+
+    if (targetUa == _currentUserAgent) {
+      IdleLoggerService()
+          .IdleLogInfo('Normal UA unchanged, keeping: $_currentUserAgent');
+      return;
+    }
+
+    IdleLoggerService()
+        .IdleLogInfo('Applying NORMAL WebView User-Agent: $targetUa');
+
+    try {
+      await IdleWebViewController!.setSettings(
+        settings: InAppWebViewSettings(userAgent: targetUa),
+      );
+      _currentUserAgent = targetUa;
+      print('[UA] NORMAL WEBVIEW USER AGENT: $_currentUserAgent');
+    } catch (e) {
+      IdleLoggerService()
+          .IdleLogError('Error while setting normal User-Agent "$targetUa": $e');
+    }
+  }
+
+  Future<void> _switchUserAgentForUrl(Uri? uri) async {
+    if (uri == null) return;
+
+    if (_isGoogleUrl(uri)) {
+      _isCurrentlyOnGoogle = true;
+      await _applyGoogleUserAgent();
+    } else {
+      if (_isCurrentlyOnGoogle) {
+        _isCurrentlyOnGoogle = false;
+      }
+      await _applyNormalUserAgentIfNeeded();
+    }
+  }
+
+  Future<void> printJsUserAgent() async {
+    if (IdleWebViewController == null) return;
+
+    try {
+      final ua = await IdleWebViewController!.evaluateJavascript(
+        source: "navigator.userAgent",
+      );
+
+      if (ua is String) {
+        print('[JS UA] navigator.userAgent = $ua');
+      } else {
+        print('[JS UA] navigator.userAgent (non-string) = $ua');
+      }
+    } catch (e, st) {
+      print('Error reading navigator.userAgent: $e\n$st');
+    }
+  }
+
+  Future<void> debugPrintCurrentUserAgent() async {
+    IdleLoggerService()
+        .IdleLogInfo('[STATE UA] _currentUserAgent = $_currentUserAgent');
+    await printJsUserAgent();
+  }
+
+  // =======================================================================
+  // Флаги "загружено один раз" и кеш диплинка
+  // =======================================================================
+
+  Future<void> IdleLoadLoadedFlag() async {
+    final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+    IdleLoadedOnceSent = idlePrefs.getBool(idleLoadedOnceKey) ?? false;
+  }
+
+  Future<void> IdleSaveLoadedFlag() async {
+    final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+    await idlePrefs.setBool(idleLoadedOnceKey, true);
+    IdleLoadedOnceSent = true;
+  }
+
+  Future<void> IdleLoadCachedDeep() async {
+    try {
+      final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+      final String? idleCached = idlePrefs.getString(idleCachedDeepKey);
+      if ((idleCached ?? '').isNotEmpty) {
+        IdleDeepLinkFromPush = idleCached;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> IdleSaveCachedDeep(String uri) async {
+    try {
+      final SharedPreferences idlePrefs = await SharedPreferences.getInstance();
+      await idlePrefs.setString(idleCachedDeepKey, uri);
+    } catch (_) {}
+  }
+
+  Future<void> IdleSendLoadedOnce({
+    required String url,
+    required int timestart,
+  }) async {
+    if (IdleLoadedOnceSent) return;
+
+    final int idleNow = DateTime.now().millisecondsSinceEpoch;
+
+    await IdlePostStat(
+      event: 'Loaded',
+      timeStart: timestart,
+      timeFinish: idleNow,
+      url: url,
+      appSid: IdleAnalyticsSpyInstance.IdleAppsFlyerUid,
+      firstPageLoadTs: IdleFirstPageTimestamp,
+    );
+
+    await IdleSaveLoadedFlag();
+  }
+
+  void IdleBootHarbor() {
+    IdleStartWarmProgress();
+    IdleWireFcmHandlers();
+    IdleAnalyticsSpyInstance.IdleStartTracking(
+      onUpdate: () => setState(() {}),
+    );
+    IdleBindNotificationTap();
+    IdlePrepareDeviceProfile();
+  }
+
+  void IdleWireFcmHandlers() {
+    FirebaseMessaging.onMessage.listen((RemoteMessage idleMessage) async {
+      final dynamic idleLink = idleMessage.data['uri'];
+      if (idleLink != null) {
+        final String idleUri = idleLink.toString();
+        IdleDeepLinkFromPush = idleUri;
+        await IdleSaveCachedDeep(idleUri);
+      } else {
+        IdleResetHomeAfterDelay();
+      }
+    });
+
+    FirebaseMessaging.onMessageOpenedApp
+        .listen((RemoteMessage idleMessage) async {
+      final dynamic idleLink = idleMessage.data['uri'];
+      if (idleLink != null) {
+        final String idleUri = idleLink.toString();
+        IdleDeepLinkFromPush = idleUri;
+        await IdleSaveCachedDeep(idleUri);
+
+        IdleNavigateToUri(idleUri);
+
+        await IdlePushDeviceInfo();
+        await IdlePushAppsFlyerData();
+      } else {
+        IdleResetHomeAfterDelay();
+      }
+    });
+  }
+
+  void IdleBindNotificationTap() {
+    MethodChannel('com.example.fcm/notification')
+        .setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'onNotificationTap') {
+        final Map<String, dynamic> idlePayload =
+        Map<String, dynamic>.from(call.arguments);
+        final String? idleUriRaw = idlePayload['uri']?.toString();
+
+        if (idleUriRaw != null &&
+            idleUriRaw.isNotEmpty &&
+            !idleUriRaw.contains('Нет URI')) {
+          final String idleUri = idleUriRaw;
+          IdleDeepLinkFromPush = idleUri;
+          await IdleSaveCachedDeep(idleUri);
+
+          if (!context.mounted) return;
+
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute<Widget>(
+              builder: (BuildContext context) => NcupTableView(idleUri),
+            ),
+                (Route<dynamic> route) => false,
+          );
+
+          await IdlePushDeviceInfo();
+          await IdlePushAppsFlyerData();
+        }
+      }
+    });
+  }
+
+  Future<void> IdlePrepareDeviceProfile() async {
+    try {
+      await IdleDeviceProfileInstance.IdleInitialize();
+
+      final FirebaseMessaging idleMessaging = FirebaseMessaging.instance;
+      final NotificationSettings idleSettings =
+      await idleMessaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
       );
 
-      loungeOfIdlenessDeviceProfile.loungeOfIdlenessPushEnabled =
-          loungeOfIdlenessSettings.authorizationStatus ==
+      IdleDeviceProfileInstance.IdlePushEnabled =
+          idleSettings.authorizationStatus ==
               AuthorizationStatus.authorized ||
-              loungeOfIdlenessSettings.authorizationStatus ==
+              idleSettings.authorizationStatus ==
                   AuthorizationStatus.provisional;
 
-      await loungeOfIdlenessLoadLoadedFlag();
-      await loungeOfIdlenessLoadCachedDeep();
+      await IdleLoadLoadedFlag();
+      await IdleLoadCachedDeep();
 
-      loungeOfIdlenessBosunViewModel = LoungeOfIdlenessBosunViewModel(
-        loungeOfIdlenessDeviceProfile: loungeOfIdlenessDeviceProfile,
-        loungeOfIdlenessAnalyticsSpyService:
-        loungeOfIdlenessAnalyticsSpyService,
+      IdleBosunInstance = IdleBosunViewModel(
+        IdleDeviceProfileInstance: IdleDeviceProfileInstance,
+        IdleAnalyticsSpyInstance: IdleAnalyticsSpyInstance,
       );
 
-      loungeOfIdlenessCourierService =
-          LoungeOfIdlenessCourierService(
-            loungeOfIdlenessBosunViewModel:
-            loungeOfIdlenessBosunViewModel!,
-            loungeOfIdlenessGetWebViewController: () =>
-            loungeOfIdlenessWebViewController,
-          );
+      IdleCourier = IdleCourierService(
+        IdleBosun: IdleBosunInstance!,
+        IdleGetWebViewController: () => IdleWebViewController,
+      );
     } catch (error) {
-      LoungeOfIdlenessLoggerService().loungeOfIdlenessLogError(
-          'prepareDeviceProfile fail: $error');
+      IdleLoggerService().IdleLogError('prepareDeviceProfile fail: $error');
     }
   }
 
-  void loungeOfIdlenessNavigateToUri(String link) async {
+  void IdleNavigateToUri(String link) async {
     try {
-      await loungeOfIdlenessWebViewController?.loadUrl(
+      await IdleWebViewController?.loadUrl(
         urlRequest: URLRequest(url: WebUri(link)),
       );
     } catch (error) {
-      LoungeOfIdlenessLoggerService()
-          .loungeOfIdlenessLogError('navigate error: $error');
+      IdleLoggerService().IdleLogError('navigate error: $error');
     }
   }
 
-  void loungeOfIdlenessResetHomeAfterDelay() {
+  void IdleResetHomeAfterDelay() {
     Future<void>.delayed(const Duration(seconds: 3), () {
       try {
-        loungeOfIdlenessWebViewController?.loadUrl(
-          urlRequest: URLRequest(url: WebUri(loungeOfIdlenessHomeUrl)),
+        IdleWebViewController?.loadUrl(
+          urlRequest: URLRequest(url: WebUri(IdleHomeUrl)),
         );
       } catch (_) {}
     });
   }
 
-  Future<void> loungeOfIdlenessPushDeviceInfo() async {
-    final LoungeOfIdlenessAppBloc loungeOfIdlenessBloc =
-    context.read<LoungeOfIdlenessAppBloc>();
-    final String? loungeOfIdlenessBlocToken =
-        loungeOfIdlenessBloc.state.loungeOfIdlenessFcmToken;
+  String? _resolveTokenForShip() {
+    if (widget.IdleSignal != null && widget.IdleSignal!.isNotEmpty) {
+      return widget.IdleSignal;
+    }
+    return null;
+  }
 
-    final String? token =
-    (widget.loungeOfIdlenessSignal != null &&
-        widget.loungeOfIdlenessSignal!.isNotEmpty)
-        ? widget.loungeOfIdlenessSignal
-        : loungeOfIdlenessBlocToken;
+  Future<void> _sendAllDataToPageTwice() async {
+    await IdlePushDeviceInfo();
 
-    LoungeOfIdlenessLoggerService()
-        .loungeOfIdlenessLogInfo('TOKEN ship $token');
+    Future<void>.delayed(const Duration(seconds: 6), () async {
+      await IdlePushDeviceInfo();
+      await IdlePushAppsFlyerData();
+    });
+  }
+
+  Future<void> IdlePushDeviceInfo() async {
+    final String? idleToken = _resolveTokenForShip();
+
     try {
-      await loungeOfIdlenessCourierService
-          ?.loungeOfIdlenessPutDeviceToLocalStorage(token);
+      await IdleCourier?.IdlePutDeviceToLocalStorage(idleToken);
     } catch (error) {
-      LoungeOfIdlenessLoggerService()
-          .loungeOfIdlenessLogError('pushDeviceInfo error: $error');
+      IdleLoggerService().IdleLogError('pushDeviceInfo error: $error');
     }
   }
 
-  Future<void> loungeOfIdlenessPushAppsFlyerData() async {
-    final LoungeOfIdlenessAppBloc loungeOfIdlenessBloc =
-    context.read<LoungeOfIdlenessAppBloc>();
-    final String? loungeOfIdlenessBlocToken =
-        loungeOfIdlenessBloc.state.loungeOfIdlenessFcmToken;
-
-    final String? token =
-    (widget.loungeOfIdlenessSignal != null &&
-        widget.loungeOfIdlenessSignal!.isNotEmpty)
-        ? widget.loungeOfIdlenessSignal
-        : loungeOfIdlenessBlocToken;
+  Future<void> IdlePushAppsFlyerData() async {
+    final String? idleToken = _resolveTokenForShip();
 
     try {
-      await loungeOfIdlenessCourierService
-          ?.loungeOfIdlenessSendRawToPage(
-        token,
-        deepLink: loungeOfIdlenessDeepLinkFromPush,
+      await IdleCourier?.IdleSendRawToPage(
+        idleToken,
+        deepLink: IdleDeepLinkFromPush,
       );
     } catch (error) {
-      LoungeOfIdlenessLoggerService().loungeOfIdlenessLogError(
-          'pushAppsFlyerData error: $error');
+      IdleLoggerService().IdleLogError('pushAppsFlyerData error: $error');
     }
   }
 
-  void loungeOfIdlenessStartWarmProgress() {
-    int loungeOfIdlenessTick = 0;
-    loungeOfIdlenessWarmProgress = 0.0;
+  void IdleStartWarmProgress() {
+    int idleTick = 0;
+    IdleWarmProgress = 0.0;
 
-    loungeOfIdlenessWarmTimer =
-        Timer.periodic(const Duration(milliseconds: 100),
-                (Timer timer) {
-              if (!mounted) return;
+    IdleWarmTimer =
+        Timer.periodic(const Duration(milliseconds: 100), (Timer timer) {
+          if (!mounted) return;
 
-              setState(() {
-                loungeOfIdlenessTick++;
-                loungeOfIdlenessWarmProgress =
-                    loungeOfIdlenessTick / (loungeOfIdlenessWarmSeconds * 10);
+          setState(() {
+            idleTick++;
+            IdleWarmProgress = idleTick / (IdleWarmSeconds * 10);
 
-                if (loungeOfIdlenessWarmProgress >= 1.0) {
-                  loungeOfIdlenessWarmProgress = 1.0;
-                  loungeOfIdlenessWarmTimer.cancel();
-                }
-              });
-            });
+            if (IdleWarmProgress >= 1.0) {
+              IdleWarmProgress = 1.0;
+              IdleWarmTimer.cancel();
+            }
+          });
+        });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      loungeOfIdlenessSleepAt = DateTime.now();
+      IdleSleepAt = DateTime.now();
     }
 
     if (state == AppLifecycleState.resumed) {
-      if (Platform.isIOS && loungeOfIdlenessSleepAt != null) {
-        final DateTime loungeOfIdlenessNow = DateTime.now();
-        final Duration loungeOfIdlenessDrift =
-        loungeOfIdlenessNow.difference(loungeOfIdlenessSleepAt!);
+      if (Platform.isIOS && IdleSleepAt != null) {
+        final DateTime idleNow = DateTime.now();
+        final Duration idleDrift = idleNow.difference(IdleSleepAt!);
 
-        if (loungeOfIdlenessDrift > const Duration(minutes: 25)) {
-          loungeOfIdlenessReboardHarbor();
+        if (idleDrift > const Duration(minutes: 25)) {
+          IdleReboardHarbor();
         }
       }
-      loungeOfIdlenessSleepAt = null;
+      IdleSleepAt = null;
     }
   }
 
-  void loungeOfIdlenessReboardHarbor() {
+  void IdleReboardHarbor() {
     if (!mounted) return;
 
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
@@ -1291,9 +1480,8 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute<Widget>(
-          builder: (BuildContext context) => LoungeOfIdlenessHarbor(
-            loungeOfIdlenessSignal: widget.loungeOfIdlenessSignal,
-          ),
+          builder: (BuildContext context) =>
+              IdleHarbor(IdleSignal: widget.IdleSignal),
         ),
             (Route<dynamic> route) => false,
       );
@@ -1303,132 +1491,187 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    loungeOfIdlenessWarmTimer.cancel();
+    IdleWarmTimer.cancel();
+
+    _parentInstallTimer?.cancel();
+    _popupInstallTimer?.cancel();
+
+    IdleWebViewController = null;
+    IdlePopupWebViewController = null;
+
     super.dispose();
   }
 
-  bool loungeOfIdlenessIsBareEmail(Uri uri) {
-    final String loungeOfIdlenessScheme = uri.scheme;
-    if (loungeOfIdlenessScheme.isNotEmpty) return false;
-    final String loungeOfIdlenessRaw = uri.toString();
-    return loungeOfIdlenessRaw.contains('@') &&
-        !loungeOfIdlenessRaw.contains(' ');
+  // ===================== Email / mailto =====================
+
+  bool IdleIsBareEmail(Uri uri) {
+    final String idleScheme = uri.scheme;
+    if (idleScheme.isNotEmpty) return false;
+    final String idleRaw = uri.toString();
+    return idleRaw.contains('@') && !idleRaw.contains(' ');
   }
 
-  Uri loungeOfIdlenessToMailto(Uri uri) {
-    final String loungeOfIdlenessFull = uri.toString();
-    final List<String> loungeOfIdlenessParts =
-    loungeOfIdlenessFull.split('?');
-    final String loungeOfIdlenessEmail =
-        loungeOfIdlenessParts.first;
-    final Map<String, String> loungeOfIdlenessQueryParams =
-    loungeOfIdlenessParts.length > 1
-        ? Uri.splitQueryString(loungeOfIdlenessParts[1])
+  Uri IdleToMailto(Uri uri) {
+    final String idleFull = uri.toString();
+    final List<String> idleParts = idleFull.split('?');
+    final String idleEmail = idleParts.first;
+    final Map<String, String> idleQueryParams = idleParts.length > 1
+        ? Uri.splitQueryString(idleParts[1])
         : <String, String>{};
 
     return Uri(
       scheme: 'mailto',
-      path: loungeOfIdlenessEmail,
-      queryParameters: loungeOfIdlenessQueryParams.isEmpty
-          ? null
-          : loungeOfIdlenessQueryParams,
+      path: idleEmail,
+      queryParameters: idleQueryParams.isEmpty ? null : idleQueryParams,
     );
   }
 
-  bool loungeOfIdlenessIsPlatformLink(Uri uri) {
-    final String loungeOfIdlenessScheme =
-    uri.scheme.toLowerCase();
-    if (loungeOfIdlenessSpecialSchemes.contains(
-        loungeOfIdlenessScheme)) {
+  Future<bool> IdleOpenMailExternal(Uri mailto) async {
+    try {
+      final String scheme = mailto.scheme.toLowerCase();
+      final String path = mailto.path.toLowerCase();
+
+      IdleLoggerService().IdleLogInfo(
+          'IdleOpenMailExternal: scheme=$scheme path=$path uri=$mailto');
+
+      if (scheme != 'mailto') {
+        final bool ok = await launchUrl(
+          mailto,
+          mode: LaunchMode.externalApplication,
+        );
+        IdleLoggerService()
+            .IdleLogInfo('IdleOpenMailExternal: non-mailto result=$ok');
+        return ok;
+      }
+
+      final bool can = await canLaunchUrl(mailto);
+      IdleLoggerService()
+          .IdleLogInfo('IdleOpenMailExternal: canLaunchUrl(mailto) = $can');
+
+      if (can) {
+        final bool ok = await launchUrl(
+          mailto,
+          mode: LaunchMode.externalApplication,
+        );
+        IdleLoggerService()
+            .IdleLogInfo('IdleOpenMailExternal: externalApplication result=$ok');
+        if (ok) return true;
+      }
+
+      IdleLoggerService().IdleLogWarn(
+          'IdleOpenMailExternal: no native handler for mailto, fallback to Gmail Web');
+      final Uri gmailUri = IdleGmailizeMailto(mailto);
+      final bool webOk = await IdleOpenWeb(gmailUri);
+      IdleLoggerService()
+          .IdleLogInfo('IdleOpenMailExternal: Gmail Web fallback result=$webOk');
+      return webOk;
+    } catch (e, st) {
+      IdleLoggerService()
+          .IdleLogError('IdleOpenMailExternal error: $e\n$st; url=$mailto');
+      return false;
+    }
+  }
+
+  Future<bool> IdleOpenMailWeb(Uri mailto) async {
+    final Uri idleGmailUri = IdleGmailizeMailto(mailto);
+    return IdleOpenWeb(idleGmailUri);
+  }
+
+  Uri IdleGmailizeMailto(Uri mailUri) {
+    final Map<String, String> idleQueryParams = mailUri.queryParameters;
+
+    final Map<String, String> idleParams = <String, String>{
+      'view': 'cm',
+      'fs': '1',
+      if (mailUri.path.isNotEmpty) 'to': mailUri.path,
+      if ((idleQueryParams['subject'] ?? '').isNotEmpty)
+        'su': idleQueryParams['subject']!,
+      if ((idleQueryParams['body'] ?? '').isNotEmpty)
+        'body': idleQueryParams['body']!,
+      if ((idleQueryParams['cc'] ?? '').isNotEmpty)
+        'cc': idleQueryParams['cc']!,
+      if ((idleQueryParams['bcc'] ?? '').isNotEmpty)
+        'bcc': idleQueryParams['bcc']!,
+    };
+
+    return Uri.https('mail.google.com', '/mail/', idleParams);
+  }
+
+  bool IdleIsPlatformLink(Uri uri) {
+    final String idleScheme = uri.scheme.toLowerCase();
+    if (IdleSpecialSchemes.contains(idleScheme)) {
       return true;
     }
 
-    if (loungeOfIdlenessScheme == 'http' ||
-        loungeOfIdlenessScheme == 'https') {
-      final String loungeOfIdlenessHost =
-      uri.host.toLowerCase();
+    if (idleScheme == 'http' || idleScheme == 'https') {
+      final String idleHost = uri.host.toLowerCase();
 
-      if (loungeOfIdlenessExternalHosts
-          .contains(loungeOfIdlenessHost)) {
+      if (IdleExternalHosts.contains(idleHost)) {
         return true;
       }
 
-      if (loungeOfIdlenessHost.endsWith('t.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('wa.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('m.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('signal.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('facebook.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('instagram.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('twitter.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('x.com')) return true;
+      if (idleHost.endsWith('t.me')) return true;
+      if (idleHost.endsWith('wa.me')) return true;
+      if (idleHost.endsWith('m.me')) return true;
+      if (idleHost.endsWith('signal.me')) return true;
+      if (idleHost.endsWith('facebook.com')) return true;
+      if (idleHost.endsWith('instagram.com')) return true;
+      if (idleHost.endsWith('twitter.com')) return true;
+      if (idleHost.endsWith('x.com')) return true;
     }
 
     return false;
   }
 
-  String loungeOfIdlenessDigitsOnly(String source) =>
+  String IdleDigitsOnly(String source) =>
       source.replaceAll(RegExp(r'[^0-9+]'), '');
 
-  Uri loungeOfIdlenessHttpizePlatformUri(Uri uri) {
-    final String loungeOfIdlenessScheme =
-    uri.scheme.toLowerCase();
+  Uri IdleHttpizePlatformUri(Uri uri) {
+    final String idleScheme = uri.scheme.toLowerCase();
 
-    if (loungeOfIdlenessScheme == 'tg' ||
-        loungeOfIdlenessScheme == 'telegram') {
-      final Map<String, String> loungeOfIdlenessQp =
-          uri.queryParameters;
-      final String? loungeOfIdlenessDomain =
-      loungeOfIdlenessQp['domain'];
+    if (idleScheme == 'tg' || idleScheme == 'telegram') {
+      final Map<String, String> idleQp = uri.queryParameters;
+      final String? idleDomain = idleQp['domain'];
 
-      if (loungeOfIdlenessDomain != null &&
-          loungeOfIdlenessDomain.isNotEmpty) {
+      if (idleDomain != null && idleDomain.isNotEmpty) {
         return Uri.https(
           't.me',
-          '/$loungeOfIdlenessDomain',
+          '/$idleDomain',
           <String, String>{
-            if (loungeOfIdlenessQp['start'] != null)
-              'start': loungeOfIdlenessQp['start']!,
+            if (idleQp['start'] != null) 'start': idleQp['start']!,
           },
         );
       }
 
-      final String loungeOfIdlenessPath =
-      uri.path.isNotEmpty ? uri.path : '';
+      final String idlePath = uri.path.isNotEmpty ? uri.path : '';
 
       return Uri.https(
         't.me',
-        '/$loungeOfIdlenessPath',
+        '/$idlePath',
         uri.queryParameters.isEmpty ? null : uri.queryParameters,
       );
     }
 
-    if ((loungeOfIdlenessScheme == 'http' ||
-        loungeOfIdlenessScheme == 'https') &&
+    if ((idleScheme == 'http' || idleScheme == 'https') &&
         uri.host.toLowerCase().endsWith('t.me')) {
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'viber') {
+    if (idleScheme == 'viber') {
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'whatsapp') {
-      final Map<String, String> loungeOfIdlenessQp =
-          uri.queryParameters;
-      final String? loungeOfIdlenessPhone =
-      loungeOfIdlenessQp['phone'];
-      final String? loungeOfIdlenessText =
-      loungeOfIdlenessQp['text'];
+    if (idleScheme == 'whatsapp') {
+      final Map<String, String> idleQp = uri.queryParameters;
+      final String? idlePhone = idleQp['phone'];
+      final String? idleText = idleQp['text'];
 
-      if (loungeOfIdlenessPhone != null &&
-          loungeOfIdlenessPhone.isNotEmpty) {
+      if (idlePhone != null && idlePhone.isNotEmpty) {
         return Uri.https(
           'wa.me',
-          '/${loungeOfIdlenessDigitsOnly(loungeOfIdlenessPhone)}',
+          '/${IdleDigitsOnly(idlePhone)}',
           <String, String>{
-            if (loungeOfIdlenessText != null &&
-                loungeOfIdlenessText.isNotEmpty)
-              'text': loungeOfIdlenessText,
+            if (idleText != null && idleText.isNotEmpty) 'text': idleText,
           },
         );
       }
@@ -1437,41 +1680,32 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
         'wa.me',
         '/',
         <String, String>{
-          if (loungeOfIdlenessText != null &&
-              loungeOfIdlenessText.isNotEmpty)
-            'text': loungeOfIdlenessText,
+          if (idleText != null && idleText.isNotEmpty) 'text': idleText,
         },
       );
     }
 
-    if ((loungeOfIdlenessScheme == 'http' ||
-        loungeOfIdlenessScheme == 'https') &&
+    if ((idleScheme == 'http' || idleScheme == 'https') &&
         (uri.host.toLowerCase().endsWith('wa.me') ||
             uri.host.toLowerCase().endsWith('whatsapp.com'))) {
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'skype') {
+    if (idleScheme == 'skype') {
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'fb-messenger') {
-      final String loungeOfIdlenessPath =
-      uri.pathSegments.isNotEmpty
-          ? uri.pathSegments.join('/')
-          : '';
-      final Map<String, String> loungeOfIdlenessQp =
-          uri.queryParameters;
+    if (idleScheme == 'fb-messenger') {
+      final String idlePath =
+      uri.pathSegments.isNotEmpty ? uri.pathSegments.join('/') : '';
+      final Map<String, String> idleQp = uri.queryParameters;
 
-      final String loungeOfIdlenessId =
-          loungeOfIdlenessQp['id'] ??
-              loungeOfIdlenessQp['user'] ??
-              loungeOfIdlenessPath;
+      final String idleId = idleQp['id'] ?? idleQp['user'] ?? idlePath;
 
-      if (loungeOfIdlenessId.isNotEmpty) {
+      if (idleId.isNotEmpty) {
         return Uri.https(
           'm.me',
-          '/$loungeOfIdlenessId',
+          '/$idleId',
           uri.queryParameters.isEmpty ? null : uri.queryParameters,
         );
       }
@@ -1483,36 +1717,30 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
       );
     }
 
-    if (loungeOfIdlenessScheme == 'sgnl') {
-      final Map<String, String> loungeOfIdlenessQp =
-          uri.queryParameters;
-      final String? loungeOfIdlenessPhone =
-      loungeOfIdlenessQp['phone'];
-      final String? loungeOfIdlenessUsername =
-      loungeOfIdlenessQp['username'];
+    if (idleScheme == 'sgnl') {
+      final Map<String, String> idleQp = uri.queryParameters;
+      final String? idlePhone = idleQp['phone'];
+      final String? idleUsername = idleQp['username'];
 
-      if (loungeOfIdlenessPhone != null &&
-          loungeOfIdlenessPhone.isNotEmpty) {
+      if (idlePhone != null && idlePhone.isNotEmpty) {
         return Uri.https(
           'signal.me',
-          '/#p/${loungeOfIdlenessDigitsOnly(loungeOfIdlenessPhone)}',
+          '/#p/${IdleDigitsOnly(idlePhone)}',
         );
       }
 
-      if (loungeOfIdlenessUsername != null &&
-          loungeOfIdlenessUsername.isNotEmpty) {
+      if (idleUsername != null && idleUsername.isNotEmpty) {
         return Uri.https(
           'signal.me',
-          '/#u/$loungeOfIdlenessUsername',
+          '/#u/$idleUsername',
         );
       }
 
-      final String loungeOfIdlenessPath =
-      uri.pathSegments.join('/');
-      if (loungeOfIdlenessPath.isNotEmpty) {
+      final String idlePath = uri.pathSegments.join('/');
+      if (idlePath.isNotEmpty) {
         return Uri.https(
           'signal.me',
-          '/$loungeOfIdlenessPath',
+          '/$idlePath',
           uri.queryParameters.isEmpty ? null : uri.queryParameters,
         );
       }
@@ -1520,21 +1748,19 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'tel') {
-      return Uri.parse(
-          'tel:${loungeOfIdlenessDigitsOnly(uri.path)}');
+    if (idleScheme == 'tel') {
+      return Uri.parse('tel:${IdleDigitsOnly(uri.path)}');
     }
 
-    if (loungeOfIdlenessScheme == 'mailto') {
+    if (idleScheme == 'mailto') {
       return uri;
     }
 
-    if (loungeOfIdlenessScheme == 'bnl') {
-      final String loungeOfIdlenessNewPath =
-      uri.path.isNotEmpty ? uri.path : '';
+    if (idleScheme == 'bnl') {
+      final String idleNewPath = uri.path.isNotEmpty ? uri.path : '';
       return Uri.https(
         'bnl.com',
-        '/$loungeOfIdlenessNewPath',
+        '/$idleNewPath',
         uri.queryParameters.isEmpty ? null : uri.queryParameters,
       );
     }
@@ -1542,35 +1768,7 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
     return uri;
   }
 
-  Future<bool> loungeOfIdlenessOpenMailWeb(Uri mailto) async {
-    final Uri loungeOfIdlenessGmailUri =
-    loungeOfIdlenessGmailizeMailto(mailto);
-    return loungeOfIdlenessOpenWeb(loungeOfIdlenessGmailUri);
-  }
-
-  Uri loungeOfIdlenessGmailizeMailto(Uri mailUri) {
-    final Map<String, String> loungeOfIdlenessQueryParams =
-        mailUri.queryParameters;
-
-    final Map<String, String> loungeOfIdlenessParams =
-    <String, String>{
-      'view': 'cm',
-      'fs': '1',
-      if (mailUri.path.isNotEmpty) 'to': mailUri.path,
-      if ((loungeOfIdlenessQueryParams['subject'] ?? '').isNotEmpty)
-        'su': loungeOfIdlenessQueryParams['subject']!,
-      if ((loungeOfIdlenessQueryParams['body'] ?? '').isNotEmpty)
-        'body': loungeOfIdlenessQueryParams['body']!,
-      if ((loungeOfIdlenessQueryParams['cc'] ?? '').isNotEmpty)
-        'cc': loungeOfIdlenessQueryParams['cc']!,
-      if ((loungeOfIdlenessQueryParams['bcc'] ?? '').isNotEmpty)
-        'bcc': loungeOfIdlenessQueryParams['bcc']!,
-    };
-
-    return Uri.https('mail.google.com', '/mail/', loungeOfIdlenessParams);
-  }
-
-  Future<bool> loungeOfIdlenessOpenWeb(Uri uri) async {
+  Future<bool> IdleOpenWeb(Uri uri) async {
     try {
       if (await launchUrl(
         uri,
@@ -1584,7 +1782,6 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
         mode: LaunchMode.externalApplication,
       );
     } catch (error) {
-      debugPrint('openInAppBrowser error: $error; url=$uri');
       try {
         return await launchUrl(
           uri,
@@ -1596,150 +1793,1623 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
     }
   }
 
-  Future<bool> loungeOfIdlenessOpenExternal(Uri uri) async {
+  Future<bool> IdleOpenExternal(Uri uri) async {
     try {
       return await launchUrl(
         uri,
         mode: LaunchMode.externalApplication,
       );
     } catch (error) {
-      debugPrint('openExternal error: $error; url=$uri');
       return false;
     }
   }
 
-  void loungeOfIdlenessHandleServerSavedata(String savedata) {
-    debugPrint('onServerResponse savedata: $savedata');
+  void IdleHandleServerSavedata(String savedata) {
+    print('onServerResponse savedata: $savedata');
 
-    if (savedata == 'false') {
-      Navigator.pushAndRemoveUntil(
+    if(savedata=='false'){
+      Navigator.push(
         context,
-        MaterialPageRoute<Widget>(
-          builder: (BuildContext context) => LoungeOfIdlenessApp(),
+        MaterialPageRoute(
+          builder: (_) =>
+          LoungeHomePage(),
         ),
-            (Route<dynamic> route) => false,
       );
-    } else if (savedata == 'true') {
-      // остаёмся на вебе
     }
   }
 
+  Color _parseHexColor(String hex) {
+    String value = hex.trim();
+    if (value.startsWith('#')) value = value.substring(1);
+    if (value.length == 6) {
+      value = 'FF$value';
+    }
+    final intColor = int.tryParse(value, radix: 16) ?? 0xFF000000;
+    return Color(intColor);
+  }
+
+  Future<void> _updateAppDataInLocalStorageFromProfile() async {
+    final InAppWebViewController? controller = IdleWebViewController;
+    if (controller == null) return;
+
+    final String? token = _resolveTokenForShip();
+    final Map<String, dynamic> map =
+    IdleDeviceProfileInstance.IdleToMap(fcmToken: token);
+
+    IdleLoggerService()
+        .IdleLogInfo('updateAppDataFromProfile: ${jsonEncode(map)}');
+
+    await IdleSaveJsonToLocalStorageAndPrefs(
+      controller: controller,
+      key: 'app_data',
+      data: map,
+    );
+  }
+
+  void _updateExtraDataFromServerPayload(Map<dynamic, dynamic> root) {
+    try {
+      final dynamic adataRaw = root['adata'];
+      if (adataRaw is Map) {
+        final Map adata = adataRaw;
+
+        final dynamic buttonswlRaw = adata['buttonswl'];
+        if (buttonswlRaw is List) {
+          final List<String> list = buttonswlRaw
+              .where((e) => e != null)
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList();
+          setState(() {
+            _buttonWhitelist = list;
+          });
+          IdleLoggerService()
+              .IdleLogInfo('buttonswl updated: $_buttonWhitelist');
+          _updateBackButtonVisibility();
+        }
+
+        // --------- НОВОЕ: fpscashier из adata → профиль → localStorage ---------
+        if (adata.containsKey('fpscashier')) {
+          final dynamic fpsRaw = adata['fpscashier'];
+          bool? fpsValue;
+
+          if (fpsRaw is bool) {
+            fpsValue = fpsRaw;
+          } else if (fpsRaw is num) {
+            fpsValue = fpsRaw != 0;
+          } else if (fpsRaw is String) {
+            final String v = fpsRaw.toLowerCase().trim();
+            if (v == 'true' || v == '1' || v == 'yes') fpsValue = true;
+            if (v == 'false' || v == '0' || v == 'no') fpsValue = false;
+          }
+
+          if (fpsValue != null) {
+            IdleDeviceProfileInstance.safecasher = fpsValue;
+            IdleLoggerService().IdleLogInfo(
+                'fpscashier updated from server payload: $fpsValue');
+            // Перезаписываем app_data в localStorage + SharedPrefs
+            _updateAppDataInLocalStorageFromProfile();
+          }
+        }
+        // -----------------------------------------------------------------------
+
+        // savels (если сервер будет слать именно savels)
+        final dynamic savelsRaw = adata['savels'];
+        if (savelsRaw is Map) {
+          IdleDeviceProfileInstance.IdleSavels =
+          Map<String, dynamic>.from(savelsRaw);
+          IdleLoggerService().IdleLogInfo(
+              'savels stored in profile: ${IdleDeviceProfileInstance.IdleSavels}');
+          _updateAppDataInLocalStorageFromProfile();
+        }
+      }
+    } catch (e, st) {
+      IdleLoggerService()
+          .IdleLogError('Error in _updateExtraDataFromServerPayload: $e\n$st');
+    }
+  }
+
+  void _updateSafeAreaFromServerPayload(Map<dynamic, dynamic> root) {
+    IdleLoggerService()
+        .IdleLogInfo('SAFEAREA RAW PAYLOAD: ${jsonEncode(root)}');
+
+    bool? safearea;
+    String? bgLightHex;
+    String? bgDarkHex;
+
+    final dynamic content = root['content'];
+    if (content is Map) {
+      if (content['safearea'] != null) {
+        final dynamic raw = content['safearea'];
+        if (raw is bool) {
+          safearea = raw;
+        } else if (raw is String) {
+          final String v = raw.toLowerCase().trim();
+          if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+          if (v == 'false' || v == '0' || v == 'no') safearea = false;
+        } else if (raw is num) {
+          safearea = raw != 0;
+        }
+      }
+
+      if (content['safearea_color'] != null &&
+          content['safearea_color'].toString().trim().isNotEmpty) {
+        bgLightHex = content['safearea_color'].toString().trim();
+        bgDarkHex = bgLightHex;
+      }
+    }
+
+    final dynamic adata = root['adata'];
+    if (adata is Map) {
+      if (safearea == null && adata['safearea'] != null) {
+        final dynamic raw = adata['safearea'];
+        if (raw is bool) {
+          safearea = raw;
+        } else if (raw is String) {
+          final String v = raw.toLowerCase().trim();
+          if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+          if (v == 'false' || v == '0' || v == 'no') safearea = false;
+        } else if (raw is num) {
+          safearea = raw != 0;
+        }
+      }
+
+      if (adata['bgsareaw'] != null &&
+          adata['bgsareaw'].toString().trim().isNotEmpty) {
+        bgLightHex = adata['bgsareaw'].toString().trim();
+      }
+      if (adata['bgsareab'] != null &&
+          adata['bgsareab'].toString().trim().isNotEmpty) {
+        bgDarkHex = adata['bgsareab'].toString().trim();
+      }
+    }
+
+    if (safearea == null && root['safearea'] != null) {
+      final dynamic raw = root['safearea'];
+      if (raw is bool) {
+        safearea = raw;
+      } else if (raw is String) {
+        final String v = raw.toLowerCase().trim();
+        if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+        if (v == 'false' || v == '0' || v == 'no') safearea = false;
+      } else if (raw is num) {
+        safearea = raw != 0;
+      }
+    }
+
+    IdleLoggerService().IdleLogInfo(
+        'SAFEAREA PARSED: enabled=$safearea, light=$bgLightHex, dark=$bgDarkHex');
+
+    if (safearea == null) {
+      return;
+    }
+
+    final Brightness platformBrightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+
+    String? chosenHex;
+    if (platformBrightness == Brightness.light) {
+      chosenHex = bgLightHex ?? bgDarkHex;
+    } else {
+      chosenHex = bgDarkHex ?? bgLightHex;
+    }
+
+    final bool enabled = safearea;
+    Color background =
+    enabled ? const Color(0xFF1A1A22) : const Color(0xFF000000);
+
+    if (enabled && chosenHex != null && chosenHex.isNotEmpty) {
+      background = _parseHexColor(chosenHex);
+    }
+
+    setState(() {
+      _safeAreaEnabled = enabled;
+      _safeAreaBackgroundColor = background;
+      IdleDeviceProfileInstance.IdleSafeAreaEnabled = enabled;
+      IdleDeviceProfileInstance.IdleSafeAreaColor =
+      enabled ? (chosenHex ?? '#1A1A22') : '';
+    });
+
+    IdleLoggerService().IdleLogInfo(
+        'SAFEAREA STATE UPDATED: enabled=$_safeAreaEnabled, color=$_safeAreaBackgroundColor (brightness=$platformBrightness)');
+  }
+
+  // ============================================================
+  // back button whitelist
+  // ============================================================
+
+  bool _matchesButtonWhitelist(String url) {
+    if (url.isEmpty) return false;
+    if (_buttonWhitelist.isEmpty) return false;
+    Uri? uri;
+    try {
+      uri = Uri.parse(url);
+    } catch (_) {
+      return false;
+    }
+
+    final String host = uri.host.toLowerCase();
+    final String full = uri.toString();
+
+    for (final String item in _buttonWhitelist) {
+      final String trimmed = item.trim();
+      if (trimmed.isEmpty) continue;
+
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        if (full.startsWith(trimmed)) return true;
+      } else {
+        final String domain = trimmed.toLowerCase();
+        if (host == domain || host.endsWith('.$domain')) return true;
+      }
+    }
+
+    return false;
+  }
+
+  Future<void> _updateBackButtonVisibility() async {
+    final String current = _currentUrl ?? IdleCurrentUrl;
+    final bool shouldShow = _matchesButtonWhitelist(current);
+
+    if (_backButtonHiddenAfterTap) {
+      _backButtonHiddenAfterTap = false;
+    }
+
+    if (shouldShow != _showBackButton) {
+      if (mounted) {
+        setState(() {
+          _showBackButton = shouldShow;
+        });
+      } else {
+        _showBackButton = shouldShow;
+      }
+    }
+  }
+
+  Future<void> _handleBackButtonPressed() async {
+    if (mounted) {
+      setState(() {
+        _backButtonHiddenAfterTap = true;
+        _showBackButton = false;
+      });
+    } else {
+      _backButtonHiddenAfterTap = true;
+      _showBackButton = false;
+    }
+
+    if (_isPopupVisible) {
+      await _handlePopupBackPressed();
+      return;
+    }
+
+    if (IdleWebViewController == null) return;
+    try {
+      if (await IdleWebViewController!.canGoBack()) {
+        await IdleWebViewController!.goBack();
+      } else {
+        await IdleWebViewController!.loadUrl(
+          urlRequest: URLRequest(url: WebUri(IdleHomeUrl)),
+        );
+      }
+    } catch (e, st) {
+      IdleLoggerService()
+          .IdleLogError('Error on back button pressed: $e\n$st');
+    }
+  }
+
+  // ============================================================
+  // ============== window.open / popup / newTab JSON ===========
+  // ============================================================
+
+  InAppWebViewSettings _mainWebViewSettings() {
+    return InAppWebViewSettings(
+      javaScriptEnabled: true,
+      isInspectable: true,
+      disableDefaultErrorPage: true,
+      mediaPlaybackRequiresUserGesture: false,
+      allowsInlineMediaPlayback: true,
+      allowsPictureInPictureMediaPlayback: true,
+      useOnDownloadStart: true,
+      javaScriptCanOpenWindowsAutomatically: true,
+      useShouldOverrideUrlLoading: true,
+      supportMultipleWindows: true,
+      transparentBackground: true,
+      thirdPartyCookiesEnabled: true,
+      sharedCookiesEnabled: true,
+      domStorageEnabled: true,
+      databaseEnabled: true,
+      cacheEnabled: true,
+      mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+      allowsBackForwardNavigationGestures: true,
+    );
+  }
+
+  InAppWebViewSettings _popupWebViewSettings() {
+    return InAppWebViewSettings(
+      javaScriptEnabled: true,
+      isInspectable: true,
+      disableDefaultErrorPage: true,
+      mediaPlaybackRequiresUserGesture: false,
+      allowsInlineMediaPlayback: true,
+      allowsPictureInPictureMediaPlayback: true,
+      useOnDownloadStart: true,
+      javaScriptCanOpenWindowsAutomatically: true,
+      useShouldOverrideUrlLoading: true,
+      supportMultipleWindows: true,
+      transparentBackground: false,
+      thirdPartyCookiesEnabled: true,
+      sharedCookiesEnabled: true,
+      domStorageEnabled: true,
+      databaseEnabled: true,
+      cacheEnabled: true,
+      mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+      allowsBackForwardNavigationGestures: true,
+    );
+  }
+
+  Future<void> _safeEvaluateJavascript(
+      InAppWebViewController? controller, {
+        required String source,
+        String debugName = 'js',
+      }) async {
+    if (controller == null) return;
+    if (!mounted) return;
+
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!mounted) return;
+      await controller.evaluateJavascript(source: source);
+    } catch (e) {
+      print('WERLOG: safeEvaluateJavascript error [$debugName]: $e');
+    }
+  }
+
+  Future<void> _installJsErrorLogger(InAppWebViewController controller) async {
+    await _safeEvaluateJavascript(
+      controller,
+      debugName: 'installJsErrorLogger',
+      source: r'''
+        (function() {
+          if (window.__ncupJsLoggerInstalled) return;
+          window.__ncupJsLoggerInstalled = true;
+
+          function serializeError(err) {
+            try {
+              if (!err) return null;
+              var plain = {};
+              Object.getOwnPropertyNames(err).forEach(function(key) {
+                plain[key] = err[key];
+              });
+              return plain;
+            } catch (_) {
+              return { message: String(err) };
+            }
+          }
+
+          window.onerror = function(message, source, lineno, colno, error) {
+            try {
+              var payload = {
+                type: 'onerror',
+                message: String(message || ''),
+                source: String(source || ''),
+                lineno: lineno || 0,
+                colno: colno || 0,
+                error: serializeError(error)
+              };
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('NcupJSLogger', payload);
+              }
+            } catch (e) {
+              console.log('NcupJSLogger onerror inner fail', e);
+            }
+          };
+
+          window.addEventListener('unhandledrejection', function(event) {
+            try {
+              var reason = event.reason;
+              var payload = {
+                type: 'unhandledrejection',
+                reason: serializeError(reason) || { message: String(reason || '') }
+              };
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('NcupPostMessage', payload);
+              }
+            } catch (e) {
+              console.log('NcupJSLogger unhandledrejection inner fail', e);
+            }
+          });
+        })();
+      ''',
+    );
+  }
+
+  Future<void> _installPostMessageBridge(
+      InAppWebViewController controller, {
+        required String label,
+      }) async {
+    await _safeEvaluateJavascript(
+      controller,
+      debugName: 'installPostMessageBridge-$label',
+      source: '''
+        (function() {
+          if (window.__ncupPostMessageBridgeInstalled_$label) return;
+          window.__ncupPostMessageBridgeInstalled_$label = true;
+
+          window.addEventListener('message', function(event) {
+            try {
+              var dataRaw = event.data;
+              var dataString;
+              try {
+                dataString = JSON.stringify(dataRaw);
+              } catch (e) {
+                dataString = String(dataRaw);
+              }
+
+              var payload = {
+                label: '$label',
+                origin: String(event.origin || ''),
+                data: dataString,
+                href: String(window.location.href || '')
+              };
+
+              console.log('[NCUP postMessage $label]', payload);
+
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('NcupPostMessage', payload);
+              }
+
+              try {
+                var parsed = dataRaw;
+                if (typeof parsed === 'string') {
+                  parsed = JSON.parse(parsed);
+                }
+                if (parsed && parsed.type === 'newTab' && parsed.url) {
+                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                    window.flutter_inappwebview.callHandler('NcupCheckoutAction', parsed);
+                  }
+                }
+              } catch (_) {}
+            } catch (e) {
+              console.log('NcupPostMessage bridge error', e);
+            }
+          });
+        })();
+      ''',
+    );
+  }
+
+  Future<void> _installCheckoutInterceptor(
+      InAppWebViewController controller,
+      ) async {
+    await _safeEvaluateJavascript(
+      controller,
+      debugName: 'installCheckoutInterceptor',
+      source: r'''
+        (function() {
+          if (window.__ncupCheckoutInterceptorInstalled) return;
+          window.__ncupCheckoutInterceptorInstalled = true;
+
+          function sendToFlutter(data) {
+            try {
+              if (!data || typeof data !== 'object') return;
+              if (data.type === 'newTab' && data.url) {
+                console.log('[NCUP checkout interceptor] newTab:', data.url);
+                if (
+                  window.flutter_inappwebview &&
+                  window.flutter_inappwebview.callHandler
+                ) {
+                  window.flutter_inappwebview.callHandler(
+                    'NcupCheckoutAction',
+                    data
+                  );
+                }
+              }
+            } catch (e) {
+              console.log('[NCUP checkout interceptor] send error', e);
+            }
+          }
+
+          function tryParseMaybeJson(value) {
+            try {
+              if (!value) return null;
+              if (typeof value === 'object') {
+                return value;
+              }
+              if (typeof value === 'string') {
+                return JSON.parse(value);
+              }
+              return null;
+            } catch (e) {
+              return null;
+            }
+          }
+
+          function tryHandlePayload(payload) {
+            try {
+              var data = tryParseMaybeJson(payload);
+              if (!data) return;
+
+              if (Array.isArray(data)) {
+                data.forEach(function(item) {
+                  if (item && item.type === 'newTab' && item.url) {
+                    sendToFlutter(item);
+                  }
+                });
+                return;
+              }
+
+              if (data.type === 'newTab' && data.url) {
+                sendToFlutter(data);
+                return;
+              }
+
+              if (data.savedata) {
+                var saved = tryParseMaybeJson(data.savedata);
+                if (saved && saved.type === 'newTab' && saved.url) {
+                  sendToFlutter(saved);
+                  return;
+                }
+              }
+
+              if (data.data) {
+                var nested = tryParseMaybeJson(data.data);
+                if (nested && nested.type === 'newTab' && nested.url) {
+                  sendToFlutter(nested);
+                  return;
+                }
+              }
+
+              if (data.content) {
+                var content = tryParseMaybeJson(data.content);
+                if (content && content.type === 'newTab' && content.url) {
+                  sendToFlutter(content);
+                  return;
+                }
+              }
+            } catch (e) {
+              console.log('[NCUP checkout interceptor] handle error', e);
+            }
+          }
+
+          var originalFetch = window.fetch;
+          if (originalFetch) {
+            window.fetch = function() {
+              return originalFetch.apply(this, arguments).then(function(response) {
+                try {
+                  var cloned = response.clone();
+                  cloned.text().then(function(text) {
+                    tryHandlePayload(text);
+                  }).catch(function() {});
+                } catch (e) {}
+                return response;
+              });
+            };
+          }
+
+          var OriginalXHR = window.XMLHttpRequest;
+          if (OriginalXHR) {
+            window.XMLHttpRequest = function() {
+              var xhr = new OriginalXHR();
+              var originalOpen = xhr.open;
+              var originalSend = xhr.send;
+
+              xhr.open = function() {
+                return originalOpen.apply(xhr, arguments);
+              };
+
+              xhr.send = function() {
+                xhr.addEventListener('load', function() {
+                  try {
+                    tryHandlePayload(xhr.responseText);
+                  } catch (e) {}
+                });
+                return originalSend.apply(xhr, arguments);
+              };
+
+              return xhr;
+            };
+          }
+
+          var originalOpen = window.open;
+          window.open = function(url, target, features) {
+            try {
+              console.log('[NCUP window.open intercepted]', url, target, features);
+            } catch (e) {}
+
+            if (originalOpen) {
+              return originalOpen.apply(window, arguments);
+            }
+            return null;
+          };
+        })();
+      ''',
+    );
+  }
+
+  Future<void> _installLocalStorageHook(
+      InAppWebViewController controller) async {
+    await _safeEvaluateJavascript(
+      controller,
+      debugName: 'installLocalStorageHook',
+      source: r'''
+        (function() {
+          if (window.__ncupLocalStorageHookInstalled) return;
+          window.__ncupLocalStorageHookInstalled = true;
+
+          try {
+            var originalSetItem = window.localStorage.setItem;
+            window.localStorage.setItem = function(key, value) {
+              try {
+                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                  window.flutter_inappwebview.callHandler('NcupLocalStorageSetItem', {
+                    key: String(key),
+                    value: String(value)
+                  });
+                }
+              } catch (e) {
+                console.log('Ncup localStorage hook error', e);
+              }
+              return originalSetItem.apply(this, arguments);
+            };
+          } catch (e) {
+            console.log('Ncup localStorage hook init error', e);
+          }
+        })();
+      ''',
+    );
+  }
+
+  Future<void> _safeInstallAll(
+      InAppWebViewController? controller, {
+        required String label,
+      }) async {
+    if (controller == null) return;
+    if (!mounted) return;
+
+    try {
+      await Future<void>.delayed(
+        label == 'popup'
+            ? const Duration(milliseconds: 550)
+            : const Duration(milliseconds: 250),
+      );
+      if (!mounted) return;
+      await _installJsErrorLogger(controller);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (!mounted) return;
+      await _installPostMessageBridge(controller, label: label);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (!mounted) return;
+      await _installCheckoutInterceptor(controller);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (!mounted) return;
+      await _installLocalStorageHook(controller);
+    } catch (e) {
+      print('WERLOG: safeInstallAll error label=$label error=$e');
+    }
+  }
+
+  void _scheduleSafeInstall(
+      InAppWebViewController controller, {
+        required String label,
+      }) {
+    if (label == 'popup') {
+      _popupInstallTimer?.cancel();
+      _popupInstallTimer =
+          Timer(const Duration(milliseconds: 450), () async {
+            if (!mounted) return;
+            await _safeInstallAll(controller, label: label);
+          });
+    } else {
+      _parentInstallTimer?.cancel();
+      _parentInstallTimer =
+          Timer(const Duration(milliseconds: 250), () async {
+            if (!mounted) return;
+            await _safeInstallAll(controller, label: label);
+          });
+    }
+  }
+
+  Map<String, dynamic>? _tryDecodeMap(dynamic value) {
+    try {
+      if (value == null) return null;
+      if (value is Map) {
+        return Map<String, dynamic>.from(value);
+      }
+      if (value is String) {
+        final String trimmed = value.trim();
+        if (trimmed.isEmpty) return null;
+        final dynamic decoded = jsonDecode(trimmed);
+        if (decoded is Map) {
+          return Map<String, dynamic>.from(decoded);
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _openExternalForJsonNewTab(Uri uri) async {
+    if (_isAboutBlankUri(uri)) return false;
+
+    final String url = uri.toString();
+
+    if (_handledNewTabUrls.contains(url)) {
+      print('WERLOG: duplicate JSON newTab ignored url=$url');
+      return true;
+    }
+
+    _handledNewTabUrls.add(url);
+
+    if (_isOpeningExternalNewTab) {
+      print('WERLOG: external newTab already opening, ignored url=$url');
+      return false;
+    }
+
+    _isOpeningExternalNewTab = true;
+
+    try {
+      final bool launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      print('WERLOG: JSON newTab external launched=$launched url=$url');
+      return launched;
+    } catch (e) {
+      print('WERLOG: JSON newTab external error=$e url=$url');
+      return false;
+    } finally {
+      Future<void>.delayed(const Duration(seconds: 2), () {
+        _isOpeningExternalNewTab = false;
+      });
+    }
+  }
+
+  Future<bool> _handleCheckoutAction(dynamic rawPayload) async {
+    try {
+      Map<String, dynamic>? data = _tryDecodeMap(rawPayload);
+      if (data == null) return false;
+
+      if (data.containsKey('savedata')) {
+        final Map<String, dynamic>? savedataMap =
+        _tryDecodeMap(data['savedata']);
+        if (savedataMap != null) {
+          data = savedataMap;
+        }
+      }
+
+      if (data.containsKey('data')) {
+        final Map<String, dynamic>? dataMap = _tryDecodeMap(data['data']);
+        if (dataMap != null &&
+            dataMap['type']?.toString() == 'newTab' &&
+            (dataMap['url']?.toString() ?? '').isNotEmpty) {
+          data = dataMap;
+        }
+      }
+
+      if (data.containsKey('content')) {
+        final Map<String, dynamic>? contentMap =
+        _tryDecodeMap(data['content']);
+        if (contentMap != null &&
+            contentMap['type']?.toString() == 'newTab' &&
+            (contentMap['url']?.toString() ?? '').isNotEmpty) {
+          data = contentMap;
+        }
+      }
+
+      final String type = data['type']?.toString() ?? '';
+      final String url = data['url']?.toString() ?? '';
+
+      if (type == 'newTab' && url.isNotEmpty) {
+        final Uri? uri = Uri.tryParse(url);
+        if (uri == null || _isAboutBlankUri(uri)) {
+          print('WERLOG: invalid JSON newTab uri=$url');
+          return false;
+        }
+
+        print('WERLOG: handle JSON newTab url=$url');
+        await _openExternalForJsonNewTab(uri);
+        return true;
+      }
+
+      return false;
+    } catch (e) {
+      print('WERLOG: handleCheckoutAction error: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _onCreateWindowHandler(
+      InAppWebViewController controller,
+      CreateWindowAction request,
+      ) async {
+    final Uri? idleUri = request.request.url;
+    final String urlString = idleUri?.toString() ?? '';
+
+    print(
+      'WERLOG: MAIN onCreateWindow '
+          'windowId=${request.windowId} '
+          'url=$urlString '
+          'isDialog=${request.isDialog} '
+          'hasGesture=${request.hasGesture}',
+    );
+
+    if (idleUri != null) {
+      _currentUrl = idleUri.toString();
+      await _updateBackButtonVisibility();
+
+      if (_isGoogleUrl(idleUri)) {
+        // popup откроется, UA для popup установится в onWebViewCreated popup
+      }
+
+      if (IdleIsBankScheme(idleUri) ||
+          ((idleUri.scheme == 'http' || idleUri.scheme == 'https') &&
+              IdleIsBankDomain(idleUri))) {
+        await IdleOpenBank(idleUri);
+        return false;
+      }
+
+      if (IdleIsBareEmail(idleUri)) {
+        final Uri idleMailto = IdleToMailto(idleUri);
+        await IdleOpenMailExternal(idleMailto);
+        return false;
+      }
+
+      final String idleScheme = idleUri.scheme.toLowerCase();
+
+      if (idleScheme == 'mailto') {
+        await IdleOpenMailExternal(idleUri);
+        return false;
+      }
+
+      if (idleScheme == 'tel') {
+        await launchUrl(idleUri, mode: LaunchMode.externalApplication);
+        return false;
+      }
+
+      final String host = idleUri.host.toLowerCase();
+      final bool idleIsSocial = host.endsWith('facebook.com') ||
+          host.endsWith('instagram.com') ||
+          host.endsWith('twitter.com') ||
+          host.endsWith('x.com');
+
+      if (idleIsSocial) {
+        await IdleOpenExternal(idleUri);
+        return false;
+      }
+
+      if (IdleIsPlatformLink(idleUri)) {
+        final Uri idleWebUri = IdleHttpizePlatformUri(idleUri);
+        await IdleOpenExternal(idleWebUri);
+        return false;
+      }
+    }
+
+    if (!mounted) return false;
+
+    setState(() {
+      _popupCreateAction = request;
+      _popupUrl = urlString.isNotEmpty && !_isAboutBlankUrl(urlString)
+          ? urlString
+          : null;
+      _popupCurrentUrl = _popupUrl;
+      _isPopupVisible = true;
+      _popupCanGoBack = false;
+    });
+
+    return true;
+  }
+
+  Future<bool> _onPopupCreateWindowHandler(
+      InAppWebViewController controller,
+      CreateWindowAction createWindowAction,
+      ) async {
+    final Uri? uri = createWindowAction.request.url;
+    final String urlString = uri?.toString() ?? '';
+
+    print(
+      'WERLOG: POPUP onCreateWindow '
+          'windowId=${createWindowAction.windowId} '
+          'url=$urlString',
+    );
+
+    if (!mounted) return false;
+
+    if (createWindowAction.windowId != null) {
+      setState(() {
+        _popupCreateAction = createWindowAction;
+        _popupUrl = urlString.isNotEmpty && !_isAboutBlankUrl(urlString)
+            ? urlString
+            : _popupUrl;
+        _popupCurrentUrl = _popupUrl;
+        _isPopupVisible = true;
+      });
+      return true;
+    }
+
+    if (urlString.isNotEmpty && !_isAboutBlankUrl(urlString)) {
+      try {
+        await controller.loadUrl(
+          urlRequest: URLRequest(url: WebUri(urlString)),
+        );
+      } catch (e) {
+        print('WERLOG: popup inner window.open load error: $e url=$urlString');
+      }
+    }
+
+    return false;
+  }
+
+  void _closePopup() {
+    setState(() {
+      _isPopupVisible = false;
+      _popupUrl = null;
+      _popupCurrentUrl = null;
+      _popupCreateAction = null;
+      _popupCanGoBack = false;
+      IdlePopupWebViewController = null;
+    });
+  }
+
+  Future<void> _closePopupAndNotifyParent({
+    String reason = 'closed_by_user',
+  }) async {
+    try {
+      await IdleWebViewController?.evaluateJavascript(
+        source: '''
+          try {
+            window.dispatchEvent(new MessageEvent('message', {
+              data: ${jsonEncode({
+          'type': 'ncup_popup_closed',
+          'reason': reason,
+        })},
+              origin: window.location.origin
+            }));
+          } catch(e) {
+            console.log('ncup popup close notify failed', e);
+          }
+        ''',
+      );
+    } catch (e) {
+      print('WERLOG: closePopup notify parent error: $e');
+    }
+    _closePopup();
+  }
+
+  Future<void> _refreshPopupCanGoBack() async {
+    final InAppWebViewController? c = IdlePopupWebViewController;
+    if (c == null) {
+      if (_popupCanGoBack && mounted) {
+        setState(() {
+          _popupCanGoBack = false;
+        });
+      }
+      return;
+    }
+    try {
+      final bool can = await c.canGoBack();
+      if (!mounted) return;
+      if (can != _popupCanGoBack) {
+        setState(() {
+          _popupCanGoBack = can;
+        });
+      }
+    } catch (e) {
+      print('WERLOG: _refreshPopupCanGoBack error: $e');
+    }
+  }
+
+  Future<void> _handlePopupBackPressed() async {
+    final InAppWebViewController? c = IdlePopupWebViewController;
+    if (c == null) {
+      _closePopup();
+      return;
+    }
+    try {
+      if (await c.canGoBack()) {
+        await c.goBack();
+        Future<void>.delayed(const Duration(milliseconds: 300), () {
+          _refreshPopupCanGoBack();
+        });
+      } else {
+        await _closePopupAndNotifyParent(reason: 'popup_back_no_history');
+      }
+    } catch (e) {
+      print('WERLOG: _handlePopupBackPressed error: $e');
+      _closePopup();
+    }
+  }
+
+  bool _isCurrentPopupInWhitelist() {
+    if (!_isPopupVisible) return false;
+    final String popupUrlForCheck = _popupCurrentUrl ?? _popupUrl ?? '';
+    return _matchesButtonWhitelist(popupUrlForCheck);
+  }
+
+  Widget _buildPopupWebView() {
+    final bool popupInWhitelist = _isCurrentPopupInWhitelist();
+
+    final bool showBackArrow = !popupInWhitelist && _popupCanGoBack;
+    final bool showCloseButton = !popupInWhitelist && !_popupCanGoBack;
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.96),
+        child: Column(
+          children: [
+            if (!popupInWhitelist) ...[
+              SafeArea(
+                bottom: false,
+                child: Container(
+                  color: Colors.black,
+                  child: Row(
+                    children: [
+                      if (showBackArrow)
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back,
+                              color: Colors.white),
+                          onPressed: _handlePopupBackPressed,
+                        )
+                      else if (showCloseButton)
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () {
+                            _closePopupAndNotifyParent(reason: 'close_button');
+                          },
+                        ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: Colors.white24),
+            ],
+            Expanded(
+              child: InAppWebView(
+                windowId: _popupCreateAction?.windowId,
+                initialUrlRequest:
+                (_popupCreateAction?.windowId == null) && _popupUrl != null
+                    ? URLRequest(url: WebUri(_popupUrl!))
+                    : null,
+                initialSettings: _popupWebViewSettings(),
+                onWebViewCreated:
+                    (InAppWebViewController popupController) async {
+                  IdlePopupWebViewController = popupController;
+
+                  print(
+                    'WERLOG: popup created '
+                        'windowId=${_popupCreateAction?.windowId} '
+                        'initialUrl=${_popupUrl ?? _popupCreateAction?.request.url}',
+                  );
+
+                  final String popupInitUrl =
+                      _popupUrl ??
+                          _popupCreateAction?.request.url?.toString() ?? '';
+                  if (popupInitUrl.isNotEmpty) {
+                    final Uri? popupUri = Uri.tryParse(popupInitUrl);
+                    if (popupUri != null && _isGoogleUrl(popupUri)) {
+                      await _applyGoogleUserAgentForPopup();
+                    }
+                  }
+
+                  popupController.addJavaScriptHandler(
+                    handlerName: 'NcupLocalStorageSetItem',
+                    callback: (List<dynamic> args) async {
+                      try {
+                        if (args.isEmpty) return null;
+                        final dynamic raw = args.first;
+                        if (raw is Map) {
+                          final String key = raw['key']?.toString() ?? '';
+                          final String value = raw['value']?.toString() ?? '';
+                          if (key.isNotEmpty) {
+                            final SharedPreferences prefs =
+                            await SharedPreferences.getInstance();
+                            await prefs.setString(key, value);
+                            IdleLoggerService().IdleLogInfo(
+                                'NcupLocalStorageSetItem (popup): saved key="$key" len=${value.length}');
+                          }
+                        }
+                      } catch (e, st) {
+                        IdleLoggerService().IdleLogError(
+                            'NcupLocalStorageSetItem popup handler error: $e\n$st');
+                      }
+                      return null;
+                    },
+                  );
+
+                  popupController.addJavaScriptHandler(
+                    handlerName: 'NcupCheckoutAction',
+                    callback: (List<dynamic> args) async {
+                      print('WERLOG: POPUP NcupCheckoutAction args=$args');
+                      if (args.isNotEmpty) {
+                        await _handleCheckoutAction(args.first);
+                      }
+                      return null;
+                    },
+                  );
+
+                  popupController.addJavaScriptHandler(
+                    handlerName: 'NcupPostMessage',
+                    callback: (List<dynamic> args) async {
+                      print('WERLOG: POPUP NcupPostMessage args=$args');
+                      if (args.isNotEmpty) {
+                        final dynamic first = args.first;
+                        if (first is Map && first['data'] != null) {
+                          await _handleCheckoutAction(first['data']);
+                        } else {
+                          await _handleCheckoutAction(first);
+                        }
+                      }
+                      return null;
+                    },
+                  );
+
+                  popupController.addJavaScriptHandler(
+                    handlerName: 'NcupJSLogger',
+                    callback: (List<dynamic> args) {
+                      print('WERLOG: POPUP JS error payload: $args');
+                      return null;
+                    },
+                  );
+                },
+                onPermissionRequest: (controller, request) async {
+                  return PermissionResponse(
+                    resources: request.resources,
+                    action: PermissionResponseAction.GRANT,
+                  );
+                },
+                onLoadStart: (controller, uri) async {
+                  print('WERLOG: popup onLoadStart url=$uri');
+                  if (uri != null && !_isAboutBlankUri(uri)) {
+                    if (_isGoogleUrl(uri)) {
+                      await _applyGoogleUserAgentForPopup();
+                    }
+
+                    if (mounted) {
+                      setState(() {
+                        _popupCurrentUrl = uri.toString();
+                        if (_backButtonHiddenAfterTap) {
+                          _backButtonHiddenAfterTap = false;
+                        }
+                      });
+                    }
+                  }
+                  _refreshPopupCanGoBack();
+                },
+                onLoadStop: (controller, uri) async {
+                  print('WERLOG: popup onLoadStop url=$uri');
+                  if (uri != null && !_isAboutBlankUri(uri)) {
+                    if (mounted) {
+                      setState(() {
+                        _popupCurrentUrl = uri.toString();
+                      });
+                    }
+                  }
+                  if (!_isAboutBlankUri(uri)) {
+                    _scheduleSafeInstall(controller, label: 'popup');
+                  }
+                  _refreshPopupCanGoBack();
+                },
+                onUpdateVisitedHistory: (controller, url, isReload) async {
+                  if (url != null && !_isAboutBlankUri(url)) {
+                    if (mounted) {
+                      setState(() {
+                        _popupCurrentUrl = url.toString();
+                        if (_backButtonHiddenAfterTap) {
+                          _backButtonHiddenAfterTap = false;
+                        }
+                      });
+                    }
+                  }
+                  _refreshPopupCanGoBack();
+                },
+                onCreateWindow: _onPopupCreateWindowHandler,
+                shouldOverrideUrlLoading: (
+                    InAppWebViewController controller,
+                    NavigationAction navigationAction,
+                    ) async {
+                  final Uri? uri = navigationAction.request.url;
+                  if (uri == null) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
+                  if (_isAboutBlankUri(uri)) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
+                  if (_isGoogleUrl(uri)) {
+                    await _applyGoogleUserAgentForPopup();
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
+                  final String scheme = uri.scheme.toLowerCase();
+
+                  if (IdleIsBareEmail(uri)) {
+                    final Uri mailto = IdleToMailto(uri);
+                    await IdleOpenMailExternal(mailto);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme == 'mailto') {
+                    await IdleOpenMailExternal(uri);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme == 'tel') {
+                    await launchUrl(uri,
+                        mode: LaunchMode.externalApplication);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (IdleIsBankScheme(uri) ||
+                      ((scheme == 'http' || scheme == 'https') &&
+                          IdleIsBankDomain(uri))) {
+                    await IdleOpenBank(uri);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme != 'http' && scheme != 'https') {
+                    print(
+                      'WERLOG: popup blocked non-http/https scheme=$scheme url=$uri',
+                    );
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  return NavigationActionPolicy.ALLOW;
+                },
+                onCloseWindow: (controller) {
+                  print('WERLOG: popup onCloseWindow');
+                  _closePopup();
+                },
+                onLoadError: (controller, uri, code, message) async {
+                  print(
+                    'WERLOG: popup onLoadError url=$uri code=$code msg=$message',
+                  );
+                },
+                onReceivedError: (controller, request, error) async {
+                  print(
+                    'WERLOG: popup onReceivedError '
+                        'url=${request.url} '
+                        'type=${error.type} '
+                        'desc=${error.description}',
+                  );
+                },
+                onReceivedHttpError:
+                    (controller, request, errorResponse) async {
+                  print(
+                    'WERLOG: popup onReceivedHttpError '
+                        'url=${request.url} '
+                        'status=${errorResponse.statusCode} '
+                        'reason=${errorResponse.reasonPhrase}',
+                  );
+                },
+                onConsoleMessage: (controller, consoleMessage) {
+                  print(
+                    'WERLOG: popup console: '
+                        '${consoleMessage.messageLevel} ${consoleMessage.message}',
+                  );
+                },
+                onDownloadStartRequest: (controller, req) async {
+                  print(
+                      'WERLOG: popup download for url=${req.url}, opening external');
+                  await IdleOpenExternal(req.url);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============================================================
+  // build
+  // ============================================================
+
   @override
   Widget build(BuildContext context) {
-    loungeOfIdlenessBindNotificationTap();
+    IdleBindNotificationTap();
 
-    Widget loungeOfIdlenessContent = Stack(
+    final Color bgColor =
+    _safeAreaEnabled ? _safeAreaBackgroundColor : Colors.black;
+
+    final Widget webView = Stack(
       children: <Widget>[
-        if (loungeOfIdlenessCoverVisible)
-          const LoungeOfIdlenessWaveLoader()
+        if (IdleCoverVisible)
+          const Center(child:LoungeOfIdlenessWaveLoader())
         else
           Container(
-            color: Colors.black,
+            color: bgColor,
             child: Stack(
               children: <Widget>[
                 InAppWebView(
-                  key:
-                  ValueKey<int>(loungeOfIdlenessWebViewKeyCounter),
-                  initialSettings: InAppWebViewSettings(
-                    javaScriptEnabled: true,
-                    disableDefaultErrorPage: true,
-                    mediaPlaybackRequiresUserGesture: false,
-                    allowsInlineMediaPlayback: true,
-                    allowsPictureInPictureMediaPlayback: true,
-                    useOnDownloadStart: true,
-                    javaScriptCanOpenWindowsAutomatically: true,
-                    useShouldOverrideUrlLoading: true,
-                    supportMultipleWindows: true,
-                    transparentBackground: true,
-                  ),
+                  key: ValueKey<int>(IdleWebViewKeyCounter),
+                  initialSettings: _mainWebViewSettings(),
                   initialUrlRequest: URLRequest(
-                    url: WebUri(loungeOfIdlenessHomeUrl),
+                    url: WebUri(IdleHomeUrl),
                   ),
                   onWebViewCreated:
-                      (InAppWebViewController controller) {
-                    loungeOfIdlenessWebViewController =
-                        controller;
+                      (InAppWebViewController controller) async {
+                    IdleWebViewController = controller;
+                    _currentUrl = IdleHomeUrl;
 
-                    loungeOfIdlenessBosunViewModel ??=
-                        LoungeOfIdlenessBosunViewModel(
-                          loungeOfIdlenessDeviceProfile:
-                          loungeOfIdlenessDeviceProfile,
-                          loungeOfIdlenessAnalyticsSpyService:
-                          loungeOfIdlenessAnalyticsSpyService,
-                        );
+                    IdleBosunInstance ??= IdleBosunViewModel(
+                      IdleDeviceProfileInstance: IdleDeviceProfileInstance,
+                      IdleAnalyticsSpyInstance: IdleAnalyticsSpyInstance,
+                    );
 
-                    loungeOfIdlenessCourierService ??=
-                        LoungeOfIdlenessCourierService(
-                          loungeOfIdlenessBosunViewModel:
-                          loungeOfIdlenessBosunViewModel!,
-                          loungeOfIdlenessGetWebViewController: () =>
-                          loungeOfIdlenessWebViewController,
-                        );
+                    IdleCourier ??= IdleCourierService(
+                      IdleBosun: IdleBosunInstance!,
+                      IdleGetWebViewController: () => IdleWebViewController,
+                    );
+
+                    try {
+                      final ua = await controller.evaluateJavascript(
+                        source: "navigator.userAgent",
+                      );
+                      if (ua is String && ua.trim().isNotEmpty) {
+                        _baseUserAgent = ua.trim();
+                        _currentUserAgent = _baseUserAgent!;
+                        IdleDeviceProfileInstance.IdleBaseUserAgent =
+                            _baseUserAgent;
+                        IdleLoggerService().IdleLogInfo(
+                            'Initial WebView User-Agent: $_baseUserAgent');
+                        print(
+                            '[UA] INITIAL WEBVIEW USER AGENT: $_baseUserAgent');
+                      }
+                    } catch (e) {
+                      IdleLoggerService().IdleLogWarn(
+                          'Failed to read navigator.userAgent on create: $e');
+                    }
+
+                    await _applyNormalUserAgentIfNeeded();
+
+                    controller.addJavaScriptHandler(
+                      handlerName: 'NcupLocalStorageSetItem',
+                      callback: (List<dynamic> args) async {
+                        try {
+                          if (args.isEmpty) return null;
+                          final dynamic raw = args.first;
+                          if (raw is Map) {
+                            final String key = raw['key']?.toString() ?? '';
+                            final String value =
+                                raw['value']?.toString() ?? '';
+                            if (key.isNotEmpty) {
+                              final SharedPreferences prefs =
+                              await SharedPreferences.getInstance();
+                              await prefs.setString(key, value);
+                              IdleLoggerService().IdleLogInfo(
+                                  'NcupLocalStorageSetItem (main): saved key="$key" len=${value.length}');
+                            }
+                          }
+                        } catch (e, st) {
+                          IdleLoggerService().IdleLogError(
+                              'NcupLocalStorageSetItem main handler error: $e\n$st');
+                        }
+                        return null;
+                      },
+                    );
 
                     controller.addJavaScriptHandler(
                       handlerName: 'onServerResponse',
-                      callback: (List<dynamic> args) {
-                        debugPrint(
-                            'onServerResponse raw args: $args');
-
+                      callback: (List<dynamic> args) async {
                         if (args.isEmpty) return null;
 
-                        try {
-                          if (args[0] is Map) {
-                            final dynamic loungeOfIdlenessRaw =
-                            (args[0] as Map)['savedata'];
+                        print("Get Data server $args");
 
-                            debugPrint(
-                                "saveDATA ${loungeOfIdlenessRaw.toString()}");
-                            loungeOfIdlenessHandleServerSavedata(
-                              loungeOfIdlenessRaw?.toString() ??
-                                  '',
-                            );
-                          } else if (args[0] is String) {
-                            loungeOfIdlenessHandleServerSavedata(
-                                args[0] as String);
-                          } else if (args[0] is bool) {
-                            loungeOfIdlenessHandleServerSavedata(
-                                (args[0] as bool).toString());
+                        try {
+                          dynamic first = args[0];
+
+                          if (first is List && first.isNotEmpty) {
+                            first = first.first;
+                          }
+
+                          final bool handled =
+                          await _handleCheckoutAction(first);
+                          if (handled) {}
+
+                          if (first is Map) {
+                            final Map<dynamic, dynamic> root = first;
+
+                            if (root['savedata'] != null) {
+                              IdleHandleServerSavedata(
+                                  root['savedata'].toString());
+                              await _handleCheckoutAction(root['savedata']);
+                            }
+
+                            _updateExtraDataFromServerPayload(root);
+                            _updateSafeAreaFromServerPayload(root);
+                            await _updateUserAgentFromServerPayload(root);
+
+                            await _applyNormalUserAgentIfNeeded();
+
+                            try {
+                              if (!_loadedJsExecutedOnce) {
+                                final dynamic adataRaw = root['adata'];
+                                if (adataRaw is Map) {
+                                  final Map adata = adataRaw;
+                                  final dynamic loadedJsRaw =
+                                  adata['loadedjs'];
+                                  if (loadedJsRaw != null) {
+                                    final String loadedJs =
+                                    loadedJsRaw.toString().trim();
+                                    if (loadedJs.isNotEmpty) {
+                                      _pendingLoadedJs = loadedJs;
+                                      IdleLoggerService().IdleLogInfo(
+                                        'loadedjs received, will execute ONCE after 6 seconds',
+                                      );
+
+                                      Future<void>.delayed(
+                                        const Duration(seconds: 6),
+                                            () async {
+                                          if (!mounted) return;
+                                          if (_loadedJsExecutedOnce) {
+                                            IdleLoggerService()
+                                                .IdleLogInfo(
+                                                'Skipping loadedjs: already executed once');
+                                            return;
+                                          }
+                                          if (IdleWebViewController ==
+                                              null) {
+                                            IdleLoggerService()
+                                                .IdleLogWarn(
+                                                'Skipping loadedjs execution: controller is null');
+                                            return;
+                                          }
+                                          final String? jsToRun =
+                                              _pendingLoadedJs;
+                                          if (jsToRun == null ||
+                                              jsToRun.isEmpty) {
+                                            return;
+                                          }
+                                          IdleLoggerService().IdleLogInfo(
+                                              'Executing loadedjs from server payload (ONCE, delayed 6s)');
+                                          try {
+                                            await IdleWebViewController
+                                                ?.evaluateJavascript(
+                                              source: jsToRun,
+                                            );
+                                            _loadedJsExecutedOnce = true;
+                                          } catch (e, st) {
+                                            IdleLoggerService().IdleLogError(
+                                                'Error executing delayed loadedjs: $e\n$st');
+                                          }
+                                        },
+                                      );
+                                    }
+                                  }
+                                }
+                              } else {
+                                IdleLoggerService().IdleLogInfo(
+                                    'loadedjs ignored: already executed once earlier');
+                              }
+                            } catch (e, st) {
+                              IdleLoggerService().IdleLogError(
+                                  'Error scheduling loadedjs: $e\n$st');
+                            }
                           }
                         } catch (e, st) {
-                          debugPrint(
-                              'onServerResponse error: $e\n$st');
+                          print('onServerResponse error: $e\n$st');
                         }
 
                         return null;
                       },
                     );
+
+                    controller.addJavaScriptHandler(
+                      handlerName: 'NcupCheckoutAction',
+                      callback: (List<dynamic> args) async {
+                        try {
+                          print('WERLOG: MAIN NcupCheckoutAction args=$args');
+                          if (args.isNotEmpty) {
+                            await _handleCheckoutAction(args.first);
+                          }
+                        } catch (e) {
+                          print(
+                              'WERLOG: MAIN NcupCheckoutAction error: $e');
+                        }
+                        return null;
+                      },
+                    );
+
+                    controller.addJavaScriptHandler(
+                      handlerName: 'NcupJSLogger',
+                      callback: (List<dynamic> args) {
+                        try {
+                          final dynamic payload =
+                          args.isNotEmpty ? args.first : null;
+                          print('WERLOG: MAIN JS error payload: $payload');
+                        } catch (e) {
+                          print('WERLOG: NcupJSLogger handler error: $e');
+                        }
+                        return null;
+                      },
+                    );
+
+                    controller.addJavaScriptHandler(
+                      handlerName: 'NcupPostMessage',
+                      callback: (List<dynamic> args) async {
+                        try {
+                          print('WERLOG: MAIN NcupPostMessage args=$args');
+                          if (args.isNotEmpty) {
+                            final dynamic first = args.first;
+                            if (first is Map && first['data'] != null) {
+                              await _handleCheckoutAction(first['data']);
+                            } else {
+                              await _handleCheckoutAction(first);
+                            }
+                          }
+                        } catch (e) {
+                          print(
+                              'WERLOG: NcupPostMessage handler error: $e');
+                        }
+                        return null;
+                      },
+                    );
                   },
-                  onLoadStart: (
-                      InAppWebViewController controller,
-                      Uri? uri,
-                      ) async {
+                  onPermissionRequest: (controller, request) async {
+                    return PermissionResponse(
+                      resources: request.resources,
+                      action: PermissionResponseAction.GRANT,
+                    );
+                  },
+                  onLoadStart:
+                      (InAppWebViewController controller, Uri? uri) async {
                     setState(() {
-                      loungeOfIdlenessStartLoadTimestamp =
+                      IdleStartLoadTimestamp =
                           DateTime.now().millisecondsSinceEpoch;
                     });
 
-                    final Uri? loungeOfIdlenessViewUri = uri;
-                    if (loungeOfIdlenessViewUri != null) {
-                      if (loungeOfIdlenessIsBareEmail(
-                          loungeOfIdlenessViewUri)) {
+                    final Uri? idleViewUri = uri;
+                    if (idleViewUri != null) {
+                      _currentUrl = idleViewUri.toString();
+
+                      await _switchUserAgentForUrl(idleViewUri);
+
+                      await _updateBackButtonVisibility();
+
+                      if (IdleIsBareEmail(idleViewUri)) {
                         try {
                           await controller.stopLoading();
                         } catch (_) {}
-                        final Uri loungeOfIdlenessMailto =
-                        loungeOfIdlenessToMailto(
-                            loungeOfIdlenessViewUri);
-                        await loungeOfIdlenessOpenMailWeb(
-                            loungeOfIdlenessMailto);
+                        final Uri idleMailto = IdleToMailto(idleViewUri);
+                        await IdleOpenMailExternal(idleMailto);
                         return;
                       }
 
-                      final String loungeOfIdlenessScheme =
-                      loungeOfIdlenessViewUri.scheme
-                          .toLowerCase();
-                      if (loungeOfIdlenessScheme != 'http' &&
-                          loungeOfIdlenessScheme != 'https') {
+                      final String idleScheme =
+                      idleViewUri.scheme.toLowerCase();
+
+                      if (idleScheme == 'mailto') {
+                        try {
+                          await controller.stopLoading();
+                        } catch (_) {}
+                        await IdleOpenMailExternal(idleViewUri);
+                        return;
+                      }
+
+                      if (IdleIsBankScheme(idleViewUri)) {
+                        try {
+                          await controller.stopLoading();
+                        } catch (_) {}
+                        await IdleOpenBank(idleViewUri);
+                        return;
+                      }
+
+                      if (idleScheme != 'http' && idleScheme != 'https') {
                         try {
                           await controller.stopLoading();
                         } catch (_) {}
@@ -1752,21 +3422,18 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
                       int code,
                       String message,
                       ) async {
-                    final int loungeOfIdlenessNow =
+                    final int idleNow =
                         DateTime.now().millisecondsSinceEpoch;
-                    final String loungeOfIdlenessEvent =
+                    final String idleEvent =
                         'InAppWebViewError(code=$code, message=$message)';
 
-                    await loungeOfIdlenessPostStat(
-                      event: loungeOfIdlenessEvent,
-                      timeStart: loungeOfIdlenessNow,
-                      timeFinish: loungeOfIdlenessNow,
+                    await IdlePostStat(
+                      event: idleEvent,
+                      timeStart: idleNow,
+                      timeFinish: idleNow,
                       url: uri?.toString() ?? '',
-                      appSid:
-                      loungeOfIdlenessAnalyticsSpyService
-                          .loungeOfIdlenessAppsFlyerUid,
-                      firstPageLoadTs:
-                      loungeOfIdlenessFirstPageTimestamp,
+                      appSid: IdleAnalyticsSpyInstance.IdleAppsFlyerUid,
+                      firstPageLoadTs: IdleFirstPageTimestamp,
                     );
                   },
                   onReceivedError: (
@@ -1774,227 +3441,274 @@ class _LoungeOfIdlenessHarborState extends State<LoungeOfIdlenessHarbor>
                       WebResourceRequest request,
                       WebResourceError error,
                       ) async {
-                    final int loungeOfIdlenessNow =
+                    final int idleNow =
                         DateTime.now().millisecondsSinceEpoch;
-                    final String loungeOfIdlenessDescription =
+                    final String idleDescription =
                     (error.description ?? '').toString();
-                    final String loungeOfIdlenessEvent =
-                        'WebResourceError(code=$error, message=$loungeOfIdlenessDescription)';
+                    final String idleEvent =
+                        'WebResourceError(code=$error, message=$idleDescription)';
 
-                    await loungeOfIdlenessPostStat(
-                      event: loungeOfIdlenessEvent,
-                      timeStart: loungeOfIdlenessNow,
-                      timeFinish: loungeOfIdlenessNow,
+                    await IdlePostStat(
+                      event: idleEvent,
+                      timeStart: idleNow,
+                      timeFinish: idleNow,
                       url: request.url?.toString() ?? '',
-                      appSid:
-                      loungeOfIdlenessAnalyticsSpyService
-                          .loungeOfIdlenessAppsFlyerUid,
-                      firstPageLoadTs:
-                      loungeOfIdlenessFirstPageTimestamp,
+                      appSid: IdleAnalyticsSpyInstance.IdleAppsFlyerUid,
+                      firstPageLoadTs: IdleFirstPageTimestamp,
                     );
                   },
-                  onLoadStop: (
-                      InAppWebViewController controller,
-                      Uri? uri,
-                      ) async {
-                    await loungeOfIdlenessPushDeviceInfo();
-                    await loungeOfIdlenessPushAppsFlyerData();
-
+                  onLoadStop:
+                      (InAppWebViewController controller, Uri? uri) async {
                     setState(() {
-                      loungeOfIdlenessCurrentUrl =
-                          uri.toString();
+                      IdleCurrentUrl = uri.toString();
+                      _currentUrl = IdleCurrentUrl;
                     });
+
+                    if (uri != null) {
+                      await _switchUserAgentForUrl(uri);
+                    }
+
+                    if (!_isAboutBlankUri(uri)) {
+                      _scheduleSafeInstall(controller, label: 'parent');
+                    }
+
+                    await debugPrintCurrentUserAgent();
+
+                    await _sendAllDataToPageTwice();
+                    await _updateBackButtonVisibility();
 
                     Future<void>.delayed(
                       const Duration(seconds: 20),
                           () {
-                        loungeOfIdlenessSendLoadedOnce(
-                          url:
-                          loungeOfIdlenessCurrentUrl.toString(),
-                          timestart:
-                          loungeOfIdlenessStartLoadTimestamp,
+                        IdleSendLoadedOnce(
+                          url: IdleCurrentUrl.toString(),
+                          timestart: IdleStartLoadTimestamp,
                         );
                       },
                     );
                   },
-                  shouldOverrideUrlLoading: (
-                      InAppWebViewController controller,
-                      NavigationAction action,
-                      ) async {
-                    final Uri? loungeOfIdlenessUri =
-                        action.request.url;
-                    if (loungeOfIdlenessUri == null) {
+                  onUpdateVisitedHistory:
+                      (controller, url, isReload) async {
+                    if (url != null && !_isAboutBlankUri(url)) {
+                      _currentUrl = url.toString();
+                      await _updateBackButtonVisibility();
+                      await _switchUserAgentForUrl(url);
+                    }
+                  },
+                  shouldOverrideUrlLoading: (InAppWebViewController controller,
+                      NavigationAction action) async {
+                    final Uri? idleUri = action.request.url;
+                    if (idleUri == null) {
                       return NavigationActionPolicy.ALLOW;
                     }
 
-                    if (loungeOfIdlenessIsBareEmail(
-                        loungeOfIdlenessUri)) {
-                      final Uri loungeOfIdlenessMailto =
-                      loungeOfIdlenessToMailto(
-                          loungeOfIdlenessUri);
-                      await loungeOfIdlenessOpenMailWeb(
-                          loungeOfIdlenessMailto);
+                    _currentUrl = idleUri.toString();
+                    await _updateBackButtonVisibility();
+
+                    if (_isAboutBlankUri(idleUri)) {
+                      return NavigationActionPolicy.ALLOW;
+                    }
+
+                    if (_isGoogleUrl(idleUri)) {
+                      _isCurrentlyOnGoogle = true;
+                      await _applyGoogleUserAgent();
+                      return NavigationActionPolicy.ALLOW;
+                    } else {
+                      if (_isCurrentlyOnGoogle) {
+                        _isCurrentlyOnGoogle = false;
+                      }
+                      await _applyNormalUserAgentIfNeeded();
+                    }
+
+                    if (IdleIsBareEmail(idleUri)) {
+                      final Uri idleMailto = IdleToMailto(idleUri);
+                      await IdleOpenMailExternal(idleMailto);
                       return NavigationActionPolicy.CANCEL;
                     }
 
-                    final String loungeOfIdlenessScheme =
-                    loungeOfIdlenessUri.scheme.toLowerCase();
+                    final String idleScheme = idleUri.scheme.toLowerCase();
 
-                    if (loungeOfIdlenessScheme == 'mailto') {
-                      await loungeOfIdlenessOpenMailWeb(
-                          loungeOfIdlenessUri);
+                    if (idleScheme == 'mailto') {
+                      await IdleOpenMailExternal(idleUri);
                       return NavigationActionPolicy.CANCEL;
                     }
 
-                    if (loungeOfIdlenessScheme == 'tel') {
+                    if (IdleIsBankScheme(idleUri)) {
+                      await IdleOpenBank(idleUri);
+                      return NavigationActionPolicy.CANCEL;
+                    }
+
+                    if ((idleScheme == 'http' || idleScheme == 'https') &&
+                        IdleIsBankDomain(idleUri)) {
+                      await IdleOpenBank(idleUri);
+
+                      if (_isAdobeRedirect(idleUri)) {
+                        if (context.mounted) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  IdleAdobeRedirectScreen(uri: idleUri),
+                            ),
+                          );
+                        }
+                        return NavigationActionPolicy.CANCEL;
+                      }
+                      return NavigationActionPolicy.CANCEL;
+                    }
+
+                    if (idleScheme == 'tel') {
                       await launchUrl(
-                        loungeOfIdlenessUri,
+                        idleUri,
                         mode: LaunchMode.externalApplication,
                       );
                       return NavigationActionPolicy.CANCEL;
                     }
 
-                    final String loungeOfIdlenessHost =
-                    loungeOfIdlenessUri.host.toLowerCase();
-                    final bool loungeOfIdlenessIsSocial =
-                        loungeOfIdlenessHost
-                            .endsWith('facebook.com') ||
-                            loungeOfIdlenessHost
-                                .endsWith('instagram.com') ||
-                            loungeOfIdlenessHost
-                                .endsWith('twitter.com') ||
-                            loungeOfIdlenessHost
-                                .endsWith('x.com');
+                    final String host = idleUri.host.toLowerCase();
+                    final bool idleIsSocial =
+                        host.endsWith('facebook.com') ||
+                            host.endsWith('instagram.com') ||
+                            host.endsWith('twitter.com') ||
+                            host.endsWith('x.com');
 
-                    if (loungeOfIdlenessIsSocial) {
-                      await loungeOfIdlenessOpenExternal(
-                          loungeOfIdlenessUri);
+                    if (idleIsSocial) {
+                      await IdleOpenExternal(idleUri);
                       return NavigationActionPolicy.CANCEL;
                     }
 
-                    if (loungeOfIdlenessIsPlatformLink(
-                        loungeOfIdlenessUri)) {
-                      final Uri loungeOfIdlenessWebUri =
-                      loungeOfIdlenessHttpizePlatformUri(
-                          loungeOfIdlenessUri);
-                      await loungeOfIdlenessOpenExternal(
-                          loungeOfIdlenessWebUri);
+                    if (IdleIsPlatformLink(idleUri)) {
+                      final Uri idleWebUri =
+                      IdleHttpizePlatformUri(idleUri);
+                      await IdleOpenExternal(idleWebUri);
                       return NavigationActionPolicy.CANCEL;
                     }
 
-                    if (loungeOfIdlenessScheme != 'http' &&
-                        loungeOfIdlenessScheme != 'https') {
+                    if (idleScheme != 'http' && idleScheme != 'https') {
                       return NavigationActionPolicy.CANCEL;
                     }
 
                     return NavigationActionPolicy.ALLOW;
                   },
-                  onCreateWindow: (
-                      InAppWebViewController controller,
-                      CreateWindowAction request,
-                      ) async {
-                    final Uri? loungeOfIdlenessUri =
-                        request.request.url;
-                    if (loungeOfIdlenessUri == null) {
-                      return false;
-                    }
-
-                    if (loungeOfIdlenessIsBareEmail(
-                        loungeOfIdlenessUri)) {
-                      final Uri loungeOfIdlenessMailto =
-                      loungeOfIdlenessToMailto(
-                          loungeOfIdlenessUri);
-                      await loungeOfIdlenessOpenMailWeb(
-                          loungeOfIdlenessMailto);
-                      return false;
-                    }
-
-                    final String loungeOfIdlenessScheme =
-                    loungeOfIdlenessUri.scheme.toLowerCase();
-
-                    if (loungeOfIdlenessScheme == 'mailto') {
-                      await loungeOfIdlenessOpenMailWeb(
-                          loungeOfIdlenessUri);
-                      return false;
-                    }
-
-                    if (loungeOfIdlenessScheme == 'tel') {
-                      await launchUrl(
-                        loungeOfIdlenessUri,
-                        mode: LaunchMode.externalApplication,
-                      );
-                      return false;
-                    }
-
-                    final String loungeOfIdlenessHost =
-                    loungeOfIdlenessUri.host.toLowerCase();
-                    final bool loungeOfIdlenessIsSocial =
-                        loungeOfIdlenessHost
-                            .endsWith('facebook.com') ||
-                            loungeOfIdlenessHost
-                                .endsWith('instagram.com') ||
-                            loungeOfIdlenessHost
-                                .endsWith('twitter.com') ||
-                            loungeOfIdlenessHost.endsWith('x.com');
-
-                    if (loungeOfIdlenessIsSocial) {
-                      await loungeOfIdlenessOpenExternal(
-                          loungeOfIdlenessUri);
-                      return false;
-                    }
-
-                    if (loungeOfIdlenessIsPlatformLink(
-                        loungeOfIdlenessUri)) {
-                      final Uri loungeOfIdlenessWebUri =
-                      loungeOfIdlenessHttpizePlatformUri(
-                          loungeOfIdlenessUri);
-                      await loungeOfIdlenessOpenExternal(
-                          loungeOfIdlenessWebUri);
-                      return false;
-                    }
-
-                    if (loungeOfIdlenessScheme == 'http' ||
-                        loungeOfIdlenessScheme == 'https') {
-                      controller.loadUrl(
-                        urlRequest: URLRequest(
-                          url: WebUri(
-                              loungeOfIdlenessUri.toString()),
-                        ),
-                      );
-                    }
-
-                    return false;
+                  onCreateWindow: _onCreateWindowHandler,
+                  onCloseWindow: (controller) {
+                    print('WERLOG: MAIN onCloseWindow');
                   },
                   onDownloadStartRequest: (
                       InAppWebViewController controller,
                       DownloadStartRequest req,
                       ) async {
-                    await loungeOfIdlenessOpenExternal(req.url);
+                    await IdleOpenExternal(req.url);
+                  },
+                  onConsoleMessage: (controller, consoleMessage) {
+                    print(
+                      'WERLOG: MAIN console: '
+                          '${consoleMessage.messageLevel} ${consoleMessage.message}',
+                    );
                   },
                 ),
                 Visibility(
-                  visible: !loungeOfIdlenessVeilVisible,
-                  child: const LoungeOfIdlenessWaveLoader(),
+                  visible: !IdleVeilVisible,
+                  child: const Center(child: LoungeOfIdlenessWaveLoader()),
                 ),
+
+                if (_isPopupVisible &&
+                    (_popupUrl != null || _popupCreateAction != null))
+                  _buildPopupWebView(),
               ],
             ),
           ),
       ],
     );
 
-    if (loungeOfIdlenessUseSafeArea) {
-      loungeOfIdlenessContent =
-          SafeArea(child: loungeOfIdlenessContent);
-    }
+    final bool popupInWhitelist = _isCurrentPopupInWhitelist();
+
+    final bool whitelistMatch =
+        (!_isPopupVisible && _showBackButton) || popupInWhitelist;
+
+    final bool shouldShowTopBackBar =
+        whitelistMatch && !_backButtonHiddenAfterTap;
+
+    final Color topBarColor =
+    _safeAreaEnabled ? _safeAreaBackgroundColor : Colors.black;
+
+    final Widget topBackBar = shouldShowTopBackBar
+        ? Container(
+      color: topBarColor,
+      padding: const EdgeInsets.only(left: 4, right: 4),
+      height: 48,
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: _handleBackButtonPressed,
+          ),
+        ],
+      ),
+    )
+        : const SizedBox.shrink();
+
+    final Widget fullScreen = Column(
+      children: [
+        topBackBar,
+        Expanded(child: webView),
+      ],
+    );
+
+    final Widget body = _safeAreaEnabled
+        ? SafeArea(
+      child: fullScreen,
+    )
+        : fullScreen;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: bgColor,
         body: SizedBox.expand(
           child: ColoredBox(
-            color: Colors.black,
-            child: loungeOfIdlenessContent,
+            color: bgColor,
+            child: body,
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _isAdobeRedirect(Uri uri) {
+    final String host = uri.host.toLowerCase();
+    return host == 'c00.adobe.com';
+  }
+}
+
+// ---------------------- Экран для c00.adobe.com ----------------------
+
+class IdleAdobeRedirectScreen extends StatelessWidget {
+  final Uri uri;
+
+  const IdleAdobeRedirectScreen({super.key, required this.uri});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Color(0xFF111111),
+      body: Padding(
+        padding: EdgeInsets.all(20),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Go to the App Store and download the app.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                ),
+              ),
+              SizedBox(height: 24),
+              SizedBox(height: 40),
+            ],
           ),
         ),
       ),
@@ -2010,8 +3724,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(
-      loungeOfIdlenessFcmBackgroundHandler);
+  FirebaseMessaging.onBackgroundMessage(IdleFcmBackgroundHandler);
 
   if (Platform.isAndroid) {
     await InAppWebViewController.setWebContentsDebuggingEnabled(true);
@@ -2019,28 +3732,10 @@ Future<void> main() async {
 
   tz_data.initializeTimeZones();
 
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile =
-  LoungeOfIdlenessDeviceProfile();
-  final LoungeOfIdlenessAnalyticsSpyService
-  loungeOfIdlenessAnalyticsSpyService =
-  LoungeOfIdlenessAnalyticsSpyService();
-
   runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LoungeOfIdlenessAppBloc>(
-          create: (_) => LoungeOfIdlenessAppBloc(
-            loungeOfIdlenessAnalyticsSpyService:
-            loungeOfIdlenessAnalyticsSpyService,
-            loungeOfIdlenessDeviceProfile:
-            loungeOfIdlenessDeviceProfile,
-          ),
-        ),
-      ],
-      child: const MaterialApp(
-        debugShowCheckedModeBanner: false,
-        home: LoungeOfIdlenessHall(),
-      ),
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: IdleHall(),
     ),
   );
 }

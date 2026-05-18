@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
+import 'dart:math' as NcupMath;
 import 'dart:ui';
 
 import 'package:appsflyer_sdk/appsflyer_sdk.dart'
@@ -11,12 +11,12 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
-    show MethodCall, MethodChannel, SystemUiOverlayStyle;
+    show MethodCall, MethodChannel, SystemUiOverlayStyle, SystemChrome;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest.dart' as timezone_data;
-import 'package:timezone/timezone.dart' as timezone;
+import 'package:timezone/data/latest.dart' as NcupTimezoneData;
+import 'package:timezone/timezone.dart' as NcupTimezone;
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -24,116 +24,148 @@ import 'package:url_launcher/url_launcher.dart';
 import 'main.dart' show MafiaHarbor, CaptainHarbor, BillHarbor;
 
 // ============================================================================
-// Lounge of Idleness инфраструктура и паттерны
+// NCUP инфраструктура (бывшая Dress Retro инфраструктура)
 // ============================================================================
 
-class LoungeOfIdlenessLogger {
-  const LoungeOfIdlenessLogger();
+class NcupLogger {
+  const NcupLogger();
 
-  void loungeOfIdlenessLogInfo(Object message) =>
-      debugPrint('[WheelLogger] $message');
-  void loungeOfIdlenessLogWarn(Object message) =>
-      debugPrint('[WheelLogger/WARN] $message');
-  void loungeOfIdlenessLogError(Object message) =>
-      debugPrint('[WheelLogger/ERR] $message');
+  void NcupLogInfo(Object NcupMessage) =>
+      debugPrint('[DressRetroLogger] $NcupMessage');
+
+  void NcupLogWarn(Object NcupMessage) =>
+      debugPrint('[DressRetroLogger/WARN] $NcupMessage');
+
+  void NcupLogError(Object NcupMessage) =>
+      debugPrint('[DressRetroLogger/ERR] $NcupMessage');
 }
 
-class LoungeOfIdlenessVault {
-  static final LoungeOfIdlenessVault loungeOfIdlenessInstance =
-  LoungeOfIdlenessVault._loungeOfIdlenessInternal();
-  LoungeOfIdlenessVault._loungeOfIdlenessInternal();
-  factory LoungeOfIdlenessVault() => loungeOfIdlenessInstance;
+class NcupVault {
+  static final NcupVault SharedInstance = NcupVault._InternalConstructor();
+  NcupVault._InternalConstructor();
+  factory NcupVault() => SharedInstance;
 
-  final LoungeOfIdlenessLogger loungeOfIdlenessLogger =
-  const LoungeOfIdlenessLogger();
+  final NcupLogger NcupLoggerInstance = const NcupLogger();
 }
 
 // ============================================================================
-// Константы (статистика/кеш)
+// Константы (статистика/кеш) — строки в кавычках не меняем
 // ============================================================================
 
-const String loungeOfIdlenessLoadedOnceKey = 'wheel_loaded_once';
-const String loungeOfIdlenessStatEndpoint =
-    'https://getgame.portalroullete.bar/stat';
-const String loungeOfIdlenessCachedFcmKey = 'wheel_cached_fcm';
+const String MetrLoadedOnceKey = 'wheel_loaded_once';
+const String MetrStatEndpoint = 'https://getgame.portalroullete.bar/stat';
+const String MetrCachedFcmKey = 'wheel_cached_fcm';
+
+// НОВОЕ: ключи для сохранения SafeArea в SharedPreferences
+const String NcupSafeAreaEnabledKey = 'safearea_enabled';
+const String NcupSafeAreaColorKey = 'safearea_color';
+
+// ---------------- Bank constants (из первого main.dart) ----------------
+
+const Set<String> kBankSchemes = {
+  'td',
+  'rbc',
+  'cibc',
+  'scotiabank',
+  'bmo',
+  'bmodigitalbanking',
+  'desjardins',
+  'tangerine',
+  'nationalbank',
+  'simplii',
+  'dominotoronto',
+};
+
+const Set<String> kBankDomains = {
+  'td.com',
+  'tdcanadatrust.com',
+  'easyweb.td.com',
+  'rbc.com',
+  'royalbank.com',
+  'online.royalbank.com',
+  'cibc.com',
+  'cibc.ca',
+  'online.cibc.com',
+  'scotiabank.com',
+  'scotiaonline.scotiabank.com',
+  'bmo.com',
+  'bmo.ca',
+  'bmodigitalbanking.com',
+  'desjardins.com',
+  'tangerine.ca',
+  'nbc.ca',
+  'nationalbank.ca',
+  'simplii.com',
+  'simplii.ca',
+  'dominotoronto.com',
+  'dominobank.com',
+};
 
 // ============================================================================
-// Утилиты: LoungeOfIdlenessKit
+// Утилиты: NcupKit (бывший DressRetroKit)
 // ============================================================================
 
-class LoungeOfIdlenessKit {
-  static bool loungeOfIdlenessLooksLikeBareMail(Uri uri) {
-    final String loungeOfIdlenessScheme = uri.scheme;
-    if (loungeOfIdlenessScheme.isNotEmpty) return false;
-    final String loungeOfIdlenessRaw = uri.toString();
-    return loungeOfIdlenessRaw.contains('@') &&
-        !loungeOfIdlenessRaw.contains(' ');
+class NcupKit {
+  static bool NcupLooksLikeBareMail(Uri NcupUri) {
+    final String NcupScheme = NcupUri.scheme;
+    if (NcupScheme.isNotEmpty) return false;
+    final String NcupRaw = NcupUri.toString();
+    return NcupRaw.contains('@') && !NcupRaw.contains(' ');
   }
 
-  static Uri loungeOfIdlenessToMailto(Uri uri) {
-    final String loungeOfIdlenessFull = uri.toString();
-    final List<String> loungeOfIdlenessBits =
-    loungeOfIdlenessFull.split('?');
-    final String loungeOfIdlenessWho = loungeOfIdlenessBits.first;
-    final Map<String, String> loungeOfIdlenessQuery =
-    loungeOfIdlenessBits.length > 1
-        ? Uri.splitQueryString(loungeOfIdlenessBits[1])
-        : <String, String>{};
+  static Uri NcupToMailto(Uri NcupUri) {
+    final String NcupFull = NcupUri.toString();
+    final List<String> NcupBits = NcupFull.split('?');
+    final String NcupWho = NcupBits.first;
+    final Map<String, String> NcupQuery =
+    NcupBits.length > 1 ? Uri.splitQueryString(NcupBits[1]) : <String, String>{};
     return Uri(
       scheme: 'mailto',
-      path: loungeOfIdlenessWho,
-      queryParameters:
-      loungeOfIdlenessQuery.isEmpty ? null : loungeOfIdlenessQuery,
+      path: NcupWho,
+      queryParameters: NcupQuery.isEmpty ? null : NcupQuery,
     );
   }
 
-  static Uri loungeOfIdlenessGmailize(Uri loungeOfIdlenessMailUri) {
-    final Map<String, String> loungeOfIdlenessQp =
-        loungeOfIdlenessMailUri.queryParameters;
-    final Map<String, String> loungeOfIdlenessParams = <String, String>{
+  static Uri NcupGmailize(Uri NcupMailUri) {
+    final Map<String, String> NcupQp = NcupMailUri.queryParameters;
+    final Map<String, String> NcupParams = <String, String>{
       'view': 'cm',
       'fs': '1',
-      if (loungeOfIdlenessMailUri.path.isNotEmpty)
-        'to': loungeOfIdlenessMailUri.path,
-      if ((loungeOfIdlenessQp['subject'] ?? '').isNotEmpty)
-        'su': loungeOfIdlenessQp['subject']!,
-      if ((loungeOfIdlenessQp['body'] ?? '').isNotEmpty)
-        'body': loungeOfIdlenessQp['body']!,
-      if ((loungeOfIdlenessQp['cc'] ?? '').isNotEmpty)
-        'cc': loungeOfIdlenessQp['cc']!,
-      if ((loungeOfIdlenessQp['bcc'] ?? '').isNotEmpty)
-        'bcc': loungeOfIdlenessQp['bcc']!,
+      if (NcupMailUri.path.isNotEmpty) 'to': NcupMailUri.path,
+      if ((NcupQp['subject'] ?? '').isNotEmpty) 'su': NcupQp['subject']!,
+      if ((NcupQp['body'] ?? '').isNotEmpty) 'body': NcupQp['body']!,
+      if ((NcupQp['cc'] ?? '').isNotEmpty) 'cc': NcupQp['cc']!,
+      if ((NcupQp['bcc'] ?? '').isNotEmpty) 'bcc': NcupQp['bcc']!,
     };
-    return Uri.https('mail.google.com', '/mail/', loungeOfIdlenessParams);
+    return Uri.https('mail.google.com', '/mail/', NcupParams);
   }
 
-  static String loungeOfIdlenessDigitsOnly(String loungeOfIdlenessSource) =>
-      loungeOfIdlenessSource.replaceAll(RegExp(r'[^0-9+]'), '');
+  static String NcupDigitsOnly(String NcupSource) =>
+      NcupSource.replaceAll(RegExp(r'[^0-9+]'), '');
 }
 
 // ============================================================================
-// Сервис открытия ссылок: LoungeOfIdlenessLinker
+// Сервис открытия ссылок: NcupLinker (бывший DressRetroLinker)
 // ============================================================================
 
-class LoungeOfIdlenessLinker {
-  static Future<bool> loungeOfIdlenessOpen(Uri loungeOfIdlenessUri) async {
+class NcupLinker {
+  static Future<bool> NcupOpen(Uri NcupUri) async {
     try {
       if (await launchUrl(
-        loungeOfIdlenessUri,
+        NcupUri,
         mode: LaunchMode.inAppBrowserView,
       )) {
         return true;
       }
       return await launchUrl(
-        loungeOfIdlenessUri,
+        NcupUri,
         mode: LaunchMode.externalApplication,
       );
-    } catch (loungeOfIdlenessError) {
-      debugPrint(
-          'WheelLinker error: $loungeOfIdlenessError; url=$loungeOfIdlenessUri');
+    } catch (NcupError) {
+      debugPrint('DressRetroLinker error: $NcupError; url=$NcupUri');
       try {
         return await launchUrl(
-          loungeOfIdlenessUri,
+          NcupUri,
           mode: LaunchMode.externalApplication,
         );
       } catch (_) {
@@ -144,486 +176,580 @@ class LoungeOfIdlenessLinker {
 }
 
 // ============================================================================
+// Bank helpers (из первого main.dart)
+// ============================================================================
+
+bool NcupIsBankScheme(Uri uri) {
+  final String scheme = uri.scheme.toLowerCase();
+  return kBankSchemes.contains(scheme);
+}
+
+bool NcupIsBankDomain(Uri uri) {
+  final String host = uri.host.toLowerCase();
+  if (host.isEmpty) return false;
+
+  for (final String bank in kBankDomains) {
+    final String bankHost = bank.toLowerCase();
+    if (host == bankHost || host.endsWith('.$bankHost')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Future<bool> NcupOpenBank(Uri uri) async {
+  try {
+    if (NcupIsBankScheme(uri)) {
+      final bool ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      return ok;
+    }
+
+    if ((uri.scheme == 'http' || uri.scheme == 'https') &&
+        NcupIsBankDomain(uri)) {
+      final bool ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      return ok;
+    }
+  } catch (e) {
+    debugPrint('NcupOpenBank error: $e; url=$uri');
+  }
+  return false;
+}
+
+// ============================================================================
 // FCM Background Handler
 // ============================================================================
 
 @pragma('vm:entry-point')
-Future<void> loungeOfIdlenessFcmBackgroundHandler(
-    RemoteMessage loungeOfIdlenessMessage) async {
-  debugPrint("Spin ID: ${loungeOfIdlenessMessage.messageId}");
-  debugPrint("Spin Data: ${loungeOfIdlenessMessage.data}");
+Future<void> NcupFcmBackgroundHandler(RemoteMessage NcupMessage) async {
+  debugPrint("Spin ID: ${NcupMessage.messageId}");
+  debugPrint("Spin Data: ${NcupMessage.data}");
 }
 
 // ============================================================================
-// LoungeOfIdlenessDeviceProfile: информация об устройстве
+// NcupDeviceProfile (бывший DressRetroDeviceProfile)
 // ============================================================================
 
-class LoungeOfIdlenessDeviceProfile {
-  String? loungeOfIdlenessDeviceId;
-  String? loungeOfIdlenessSessionId = 'wheel-one-off';
-  String? loungeOfIdlenessPlatformKind;
-  String? loungeOfIdlenessOsBuild;
-  String? loungeOfIdlenessAppVersion;
-  String? loungeOfIdlenessLocaleCode;
-  String? loungeOfIdlenessTimezoneName;
-  bool loungeOfIdlenessPushEnabled = true;
+class NcupDeviceProfile {
+  String? NcupDeviceId;
+  String? NcupSessionId = 'wheel-one-off';
+  String? NcupPlatformKind;
+  String? NcupOsBuild;
+  String? NcupAppVersion;
+  String? NcupLocaleCode;
+  String? NcupTimezoneName;
+  bool NcupPushEnabled = true;
 
-  Future<void> loungeOfIdlenessInitialize() async {
-    final DeviceInfoPlugin loungeOfIdlenessInfoPlugin =
-    DeviceInfoPlugin();
+  // Новый UA из WebView
+  String? NcupBaseUserAgent;
+
+  // Для SafeArea (поддержка, аналогичная первому main.dart)
+  bool NcupSafeAreaEnabled = false;
+  String? NcupSafeAreaColor;
+
+  Future<void> NcupInitialize() async {
+    // Инициализация таймзон (если еще не)
+    try {
+      NcupTimezoneData.initializeTimeZones();
+    } catch (_) {
+      // игнор, если уже инициализировано
+    }
+
+    final DeviceInfoPlugin NcupInfoPlugin = DeviceInfoPlugin();
 
     if (Platform.isAndroid) {
-      final AndroidDeviceInfo loungeOfIdlenessAndroidInfo =
-      await loungeOfIdlenessInfoPlugin.androidInfo;
-      loungeOfIdlenessDeviceId = loungeOfIdlenessAndroidInfo.id;
-      loungeOfIdlenessPlatformKind = 'android';
-      loungeOfIdlenessOsBuild =
-          loungeOfIdlenessAndroidInfo.version.release;
+      final AndroidDeviceInfo NcupAndroidInfo =
+      await NcupInfoPlugin.androidInfo;
+      NcupDeviceId = NcupAndroidInfo.id;
+      NcupPlatformKind = 'android';
+      NcupOsBuild = NcupAndroidInfo.version.release;
     } else if (Platform.isIOS) {
-      final IosDeviceInfo loungeOfIdlenessIosInfo =
-      await loungeOfIdlenessInfoPlugin.iosInfo;
-      loungeOfIdlenessDeviceId =
-          loungeOfIdlenessIosInfo.identifierForVendor;
-      loungeOfIdlenessPlatformKind = 'ios';
-      loungeOfIdlenessOsBuild =
-          loungeOfIdlenessIosInfo.systemVersion;
+      final IosDeviceInfo NcupIosInfo = await NcupInfoPlugin.iosInfo;
+      NcupDeviceId = NcupIosInfo.identifierForVendor;
+      NcupPlatformKind = 'ios';
+      NcupOsBuild = NcupIosInfo.systemVersion;
     }
 
-    final PackageInfo loungeOfIdlenessPackageInfo =
-    await PackageInfo.fromPlatform();
-    loungeOfIdlenessAppVersion = loungeOfIdlenessPackageInfo.version;
-    loungeOfIdlenessLocaleCode = Platform.localeName.split('_').first;
-    loungeOfIdlenessTimezoneName = timezone.local.name;
-    loungeOfIdlenessSessionId =
-    'wheel-${DateTime.now().millisecondsSinceEpoch}';
-
-    try {
-      final FirebaseMessaging loungeOfIdlenessFm =
-          FirebaseMessaging.instance;
-      final NotificationSettings loungeOfIdlenessSettings =
-      await loungeOfIdlenessFm.getNotificationSettings();
-      loungeOfIdlenessPushEnabled =
-          loungeOfIdlenessSettings.authorizationStatus ==
-              AuthorizationStatus.authorized ||
-              loungeOfIdlenessSettings.authorizationStatus ==
-                  AuthorizationStatus.provisional;
-    } catch (_) {
-      loungeOfIdlenessPushEnabled = false;
-    }
+    final PackageInfo NcupPackageInfo = await PackageInfo.fromPlatform();
+    NcupAppVersion = NcupPackageInfo.version;
+    NcupLocaleCode = Platform.localeName.split('_').first;
+    NcupTimezoneName = NcupTimezone.local.name;
+    NcupSessionId = '${DateTime.now().millisecondsSinceEpoch}';
   }
 
-  Map<String, dynamic> loungeOfIdlenessAsMap({String? fcmToken}) => {
-    'fcm_token': fcmToken ?? 'missing_token',
-    'device_id': loungeOfIdlenessDeviceId ?? 'missing_id',
+  Map<String, dynamic> NcupAsMap({String? NcupFcmToken}) => <String, dynamic>{
+    'fcm_token': NcupFcmToken ?? 'missing_token',
+    'device_id': NcupDeviceId ?? 'missing_id',
     'app_name': 'joiler',
-    'instance_id': loungeOfIdlenessSessionId ?? 'missing_session',
-    'platform': loungeOfIdlenessPlatformKind ?? 'missing_system',
-    'os_version': loungeOfIdlenessOsBuild ?? 'missing_build',
-    'app_version': loungeOfIdlenessAppVersion ?? 'missing_app',
-    'language': loungeOfIdlenessLocaleCode ?? 'en',
-    'timezone': loungeOfIdlenessTimezoneName ?? 'UTC',
-    'push_enabled': loungeOfIdlenessPushEnabled,
+    'instance_id': NcupSessionId ?? 'missing_session',
+    'platform': NcupPlatformKind ?? 'missing_system',
+    'os_version': NcupOsBuild ?? 'missing_build',
+    'app_version': NcupAppVersion ?? 'missing_app',
+    'language': NcupLocaleCode ?? 'en',
+    'timezone': NcupTimezoneName ?? 'UTC',
+    'push_enabled': NcupPushEnabled,
+    "fthcashier": "true",
+    'safearea': NcupSafeAreaEnabled,
+    'safearea_color': NcupSafeAreaColor ?? '',
+    'base_ua': NcupBaseUserAgent ?? '',
   };
 }
 
 // ============================================================================
-// AppsFlyer шпион: LoungeOfIdlenessSpy
+// AppsFlyer шпион: NcupSpy (бывший DressRetroSpy)
 // ============================================================================
 
-class LoungeOfIdlenessSpy {
-  AppsFlyerOptions? loungeOfIdlenessOptions;
-  AppsflyerSdk? loungeOfIdlenessSdk;
+class NcupSpy {
+  AppsFlyerOptions? NcupOptions;
+  AppsflyerSdk? NcupSdk;
 
-  String loungeOfIdlenessAppsFlyerUid = '';
-  String loungeOfIdlenessAppsFlyerData = '';
+  String NcupAppsFlyerUid = '';
+  String NcupAppsFlyerData = '';
 
-  void loungeOfIdlenessStart({VoidCallback? onUpdate}) {
-    final AppsFlyerOptions loungeOfIdlenessOpts = AppsFlyerOptions(
+  void NcupStart({VoidCallback? NcupOnUpdate}) {
+    final AppsFlyerOptions NcupOpts = AppsFlyerOptions(
       afDevKey: 'qsBLmy7dAXDQhowM8V3ca4',
       appId: '6756072063',
       showDebug: true,
       timeToWaitForATTUserAuthorization: 0,
     );
 
-    loungeOfIdlenessOptions = loungeOfIdlenessOpts;
-    loungeOfIdlenessSdk = AppsflyerSdk(loungeOfIdlenessOpts);
+    NcupOptions = NcupOpts;
+    NcupSdk = AppsflyerSdk(NcupOpts);
 
-    loungeOfIdlenessSdk?.initSdk(
+    NcupSdk?.initSdk(
       registerConversionDataCallback: true,
       registerOnAppOpenAttributionCallback: true,
       registerOnDeepLinkingCallback: true,
     );
 
-    loungeOfIdlenessSdk?.startSDK(
-      onSuccess: () => LoungeOfIdlenessVault()
-          .loungeOfIdlenessLogger
-          .loungeOfIdlenessLogInfo('WheelSpy started'),
-      onError: (loungeOfIdlenessCode, loungeOfIdlenessMsg) =>
-          LoungeOfIdlenessVault()
-              .loungeOfIdlenessLogger
-              .loungeOfIdlenessLogError(
-              'WheelSpy error $loungeOfIdlenessCode: $loungeOfIdlenessMsg'),
+    NcupSdk?.startSDK(
+      onSuccess: () =>
+          NcupVault().NcupLoggerInstance.NcupLogInfo('WheelSpy started'),
+      onError: (NcupCode, NcupMsg) => NcupVault()
+          .NcupLoggerInstance
+          .NcupLogError('WheelSpy error $NcupCode: $NcupMsg'),
     );
 
-    loungeOfIdlenessSdk?.onInstallConversionData((loungeOfIdlenessValue) {
-      loungeOfIdlenessAppsFlyerData = loungeOfIdlenessValue.toString();
-      onUpdate?.call();
+    NcupSdk?.onInstallConversionData((NcupValue) {
+      NcupAppsFlyerData = NcupValue.toString();
+      NcupOnUpdate?.call();
     });
 
-    loungeOfIdlenessSdk?.getAppsFlyerUID().then((loungeOfIdlenessValue) {
-      loungeOfIdlenessAppsFlyerUid =
-          loungeOfIdlenessValue.toString();
-      onUpdate?.call();
+    NcupSdk?.getAppsFlyerUID().then((NcupValue) {
+      NcupAppsFlyerUid = NcupValue.toString();
+      NcupOnUpdate?.call();
     });
   }
 }
 
 // ============================================================================
-// Мост для FCM токена: LoungeOfIdlenessFcmBridge
+// Мост для FCM токена: NcupFcmBridge (бывший DressRetroFcmBridge)
 // ============================================================================
 
-class LoungeOfIdlenessFcmBridge {
-  final LoungeOfIdlenessLogger loungeOfIdlenessLog =
-  const LoungeOfIdlenessLogger();
-  String? loungeOfIdlenessToken;
-  final List<void Function(String)> loungeOfIdlenessWaiters =
-  <void Function(String)>[];
+class NcupFcmBridge {
+  final NcupLogger NcupLog = const NcupLogger();
+  String? NcupToken;
+  final List<void Function(String)> NcupWaiters = <void Function(String)>[];
 
-  String? get loungeOfIdlenessFcmToken => loungeOfIdlenessToken;
+  String? get NcupCurrentToken => NcupToken;
 
-  LoungeOfIdlenessFcmBridge() {
+  NcupFcmBridge() {
     const MethodChannel('com.example.fcm/token')
-        .setMethodCallHandler((MethodCall loungeOfIdlenessCall) async {
-      if (loungeOfIdlenessCall.method == 'setToken') {
-        final String loungeOfIdlenessTokenString =
-        loungeOfIdlenessCall.arguments as String;
-        if (loungeOfIdlenessTokenString.isNotEmpty) {
-          loungeOfIdlenessSetToken(loungeOfIdlenessTokenString);
+        .setMethodCallHandler((MethodCall NcupCall) async {
+      if (NcupCall.method == 'setToken') {
+        final String NcupTokenString = NcupCall.arguments as String;
+        if (NcupTokenString.isNotEmpty) {
+          NcupSetToken(NcupTokenString);
         }
       }
     });
 
-    loungeOfIdlenessRestoreToken();
+    NcupRestoreToken();
   }
 
-  Future<void> loungeOfIdlenessRestoreToken() async {
+  Future<void> NcupRestoreToken() async {
     try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      final String? loungeOfIdlenessCached =
-      loungeOfIdlenessPrefs.getString(loungeOfIdlenessCachedFcmKey);
-      if (loungeOfIdlenessCached != null &&
-          loungeOfIdlenessCached.isNotEmpty) {
-        loungeOfIdlenessSetToken(
-          loungeOfIdlenessCached,
-          notify: false,
-        );
+      final SharedPreferences NcupPrefs = await SharedPreferences.getInstance();
+      final String? NcupCached = NcupPrefs.getString(MetrCachedFcmKey);
+      if (NcupCached != null && NcupCached.isNotEmpty) {
+        NcupSetToken(NcupCached, NcupNotify: false);
       }
     } catch (_) {}
   }
 
-  Future<void> loungeOfIdlenessPersistToken(
-      String loungeOfIdlenessNewToken) async {
+  Future<void> NcupPersistToken(String NcupNewToken) async {
     try {
-      final SharedPreferences loungeOfIdlenessPrefs =
-      await SharedPreferences.getInstance();
-      await loungeOfIdlenessPrefs.setString(
-          loungeOfIdlenessCachedFcmKey, loungeOfIdlenessNewToken);
+      final SharedPreferences NcupPrefs = await SharedPreferences.getInstance();
+      await NcupPrefs.setString(MetrCachedFcmKey, NcupNewToken);
     } catch (_) {}
   }
 
-  void loungeOfIdlenessSetToken(
-      String loungeOfIdlenessNewToken, {
-        bool notify = true,
+  void NcupSetToken(
+      String NcupNewToken, {
+        bool NcupNotify = true,
       }) {
-    loungeOfIdlenessToken = loungeOfIdlenessNewToken;
-    loungeOfIdlenessPersistToken(loungeOfIdlenessNewToken);
-    if (notify) {
-      for (final void Function(String) loungeOfIdlenessCallback
-      in List<void Function(String)>.from(
-          loungeOfIdlenessWaiters)) {
+    NcupToken = NcupNewToken;
+    NcupPersistToken(NcupNewToken);
+    if (NcupNotify) {
+      for (final void Function(String) NcupCallback
+      in List<void Function(String)>.from(NcupWaiters)) {
         try {
-          loungeOfIdlenessCallback(loungeOfIdlenessNewToken);
-        } catch (loungeOfIdlenessErr) {
-          loungeOfIdlenessLog.loungeOfIdlenessLogWarn(
-              'fcm waiter error: $loungeOfIdlenessErr');
+          NcupCallback(NcupNewToken);
+        } catch (NcupErr) {
+          NcupLog.NcupLogWarn('fcm waiter error: $NcupErr');
         }
       }
-      loungeOfIdlenessWaiters.clear();
+      NcupWaiters.clear();
     }
   }
 
-  Future<void> loungeOfIdlenessWaitForToken(
-      Function(String loungeOfIdlenessTokenValue)
-      loungeOfIdlenessOnToken,
+  Future<void> NcupWaitForToken(
+      Function(String NcupTokenValue) NcupOnToken,
       ) async {
     try {
-      final FirebaseMessaging loungeOfIdlenessFm =
-          FirebaseMessaging.instance;
+      await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
 
-      final NotificationSettings loungeOfIdlenessSettings =
-      await loungeOfIdlenessFm.getNotificationSettings();
-      if (loungeOfIdlenessSettings.authorizationStatus ==
-          AuthorizationStatus.notDetermined ||
-          loungeOfIdlenessSettings.authorizationStatus ==
-              AuthorizationStatus.denied) {
-        await loungeOfIdlenessFm.requestPermission(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
-      }
-
-      if ((loungeOfIdlenessToken ?? '').isNotEmpty) {
-        loungeOfIdlenessOnToken(loungeOfIdlenessToken!);
+      if ((NcupToken ?? '').isNotEmpty) {
+        NcupOnToken(NcupToken!);
         return;
       }
 
-      loungeOfIdlenessWaiters.add(loungeOfIdlenessOnToken);
-    } catch (loungeOfIdlenessErr) {
-      loungeOfIdlenessLog.loungeOfIdlenessLogError(
-          'wheelWaitToken error: $loungeOfIdlenessErr');
+      NcupWaiters.add(NcupOnToken);
+    } catch (NcupErr) {
+      NcupLog.NcupLogError('wheelWaitToken error: $NcupErr');
     }
   }
 }
 
 // ============================================================================
-// Новый Loader: LoungeOfIdlenessWaveLoader
-// синяя надпись "Lounge" волной по буквам по центру экрана
+// NcupLoader (новый лоадер)
 // ============================================================================
 
-class LoungeOfIdlenessWaveLoader extends StatefulWidget {
-  const LoungeOfIdlenessWaveLoader({Key? key}) : super(key: key);
+class NcupLoader extends StatefulWidget {
+  const NcupLoader({Key? key}) : super(key: key);
 
   @override
-  State<LoungeOfIdlenessWaveLoader> createState() =>
-      _LoungeOfIdlenessWaveLoaderState();
+  State<NcupLoader> createState() => _NcupLoaderState();
 }
 
-class _LoungeOfIdlenessWaveLoaderState
-    extends State<LoungeOfIdlenessWaveLoader>
+class _NcupLoaderState extends State<NcupLoader>
     with SingleTickerProviderStateMixin {
-  late AnimationController loungeOfIdlenessWaveController;
+  late AnimationController NcupController;
+
+  static const Color NcupBackgroundColor = Color(0xFF05071B);
 
   @override
   void initState() {
     super.initState();
-    loungeOfIdlenessWaveController = AnimationController(
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.black,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+    ));
+    NcupController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(seconds: 3),
     )..repeat();
   }
 
   @override
   void dispose() {
-    loungeOfIdlenessWaveController.dispose();
+    NcupController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    const Color loungeOfIdlenessBackground = Colors.black;
-    const Color loungeOfIdlenessPrimaryBlue = Colors.lightBlueAccent;
-    const String loungeOfIdlenessTitle = 'Lounge';
-
-    return Scaffold(
-      backgroundColor: loungeOfIdlenessBackground,
-      body: Center(
-        child: AnimatedBuilder(
-          animation: loungeOfIdlenessWaveController,
-          builder: (BuildContext context, Widget? child) {
-            final double loungeOfIdlenessT =
-                loungeOfIdlenessWaveController.value * 2 * 3.14159265;
-
-            final List<Widget> loungeOfIdlenessLetters = <Widget>[];
-            for (int loungeOfIdlenessIndex = 0;
-            loungeOfIdlenessIndex < loungeOfIdlenessTitle.length;
-            loungeOfIdlenessIndex++) {
-              final String loungeOfIdlenessChar =
-              loungeOfIdlenessTitle[loungeOfIdlenessIndex];
-              final double loungeOfIdlenessPhase =
-                  loungeOfIdlenessT + loungeOfIdlenessIndex * 0.6;
-              final double loungeOfIdlenessDy =
-                  -6.0 * (1 + (0.5 * (1 + MathUtils.sin(loungeOfIdlenessPhase))));
-              final double loungeOfIdlenessOpacity =
-                  0.7 + 0.3 * (1 + MathUtils.sin(loungeOfIdlenessPhase)) / 2;
-
-              loungeOfIdlenessLetters.add(
-                Transform.translate(
-                  offset: Offset(0, loungeOfIdlenessDy),
-                  child: Text(
-                    loungeOfIdlenessChar,
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 3,
-                      color: loungeOfIdlenessPrimaryBlue
-                          .withOpacity(loungeOfIdlenessOpacity),
-                      shadows: <Shadow>[
-                        Shadow(
-                          color: loungeOfIdlenessPrimaryBlue
-                              .withOpacity(0.8 * loungeOfIdlenessOpacity),
-                          blurRadius: 16,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              children: loungeOfIdlenessLetters,
-            );
-          },
-        ),
+    return Container(
+      color: NcupBackgroundColor,
+      child: AnimatedBuilder(
+        animation: NcupController,
+        builder: (BuildContext context, Widget? child) {
+          final double NcupPhase = NcupController.value * 2 * NcupMath.pi;
+          return CustomPaint(
+            painter: NcupLoaderPainter(
+              NcupPhase: NcupPhase,
+            ),
+            child: const SizedBox.expand(),
+          );
+        },
       ),
     );
   }
 }
 
-// Вспомогательный утиль для синуса без импорта dart:math здесь
-class MathUtils {
-  static double sin(double value) => MathUtilsInternal.sin(value);
-}
+class NcupLoaderPainter extends CustomPainter {
+  final double NcupPhase;
 
-class MathUtilsInternal {
-  static double sin(double x) {
-    // простая обертка над dart:math sin, чтобы не засорять верхнюю часть файла
-    return (x).sin();
+  NcupLoaderPainter({
+    required this.NcupPhase,
+  });
+
+  @override
+  void paint(Canvas NcupCanvas, Size NcupSize) {
+    final double NcupWidth = NcupSize.width;
+    final double NcupHeight = NcupSize.height;
+
+    final Paint NcupBackgroundPaint = Paint()
+      ..color = const Color(0xFF05071B)
+      ..style = PaintingStyle.fill;
+    NcupCanvas.drawRect(Offset.zero & NcupSize, NcupBackgroundPaint);
+
+    final double NcupPulse = (NcupMath.sin(NcupPhase) + 1) / 2;
+
+    final Paint NcupCirclePaint = Paint()
+      ..style = PaintingStyle.fill
+      ..shader = RadialGradient(
+        colors: <Color>[
+          Colors.red.withOpacity(0.14 + 0.16 * NcupPulse),
+          Colors.transparent,
+        ],
+      ).createShader(
+        Rect.fromCircle(
+          center: Offset(NcupWidth * 0.5, NcupHeight * 0.45),
+          radius: NcupHeight * (0.4 + 0.15 * NcupPulse),
+        ),
+      );
+
+    NcupCanvas.drawCircle(
+      Offset(NcupWidth * 0.5, NcupHeight * 0.45),
+      NcupHeight * (0.4 + 0.15 * NcupPulse),
+      NcupCirclePaint,
+    );
+
+    final Paint NcupOuterPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..shader = RadialGradient(
+        colors: <Color>[
+          Colors.redAccent.withOpacity(0.10 + 0.10 * (1 - NcupPulse)),
+          Colors.transparent,
+        ],
+      ).createShader(
+        Rect.fromCircle(
+          center: Offset(NcupWidth * 0.5, NcupHeight * 0.45),
+          radius: NcupHeight * (0.55 + 0.10 * (1 - NcupPulse)),
+        ),
+      );
+    NcupCanvas.drawCircle(
+      Offset(NcupWidth * 0.5, NcupHeight * 0.45),
+      NcupHeight * (0.55 + 0.10 * (1 - NcupPulse)),
+      NcupOuterPaint,
+    );
+
+    final double NcupBaseSize = NcupWidth * 0.35;
+    final double NcupFontSize =
+        NcupBaseSize + NcupPulse * (NcupBaseSize * 0.15);
+
+    const String NcupLetter = 'N';
+    const String NcupWord = 'CUP';
+
+    final TextPainter NcupLetterPainter = TextPainter(
+      text: TextSpan(
+        text: NcupLetter,
+        style: TextStyle(
+          fontSize: NcupFontSize,
+          fontWeight: FontWeight.w900,
+          color: Colors.red.shade600,
+          letterSpacing: 4,
+          shadows: <Shadow>[
+            Shadow(
+              color: Colors.redAccent.withOpacity(0.8),
+              blurRadius: 22 + 18 * NcupPulse,
+              offset: const Offset(0, 0),
+            ),
+            Shadow(
+              color: Colors.black.withOpacity(0.8),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: NcupWidth);
+
+    final double NcupLetterX = (NcupWidth - NcupLetterPainter.width) / 2;
+    final double NcupLetterY = (NcupHeight - NcupLetterPainter.height) / 2;
+
+    final Offset NcupLetterOffset = Offset(NcupLetterX, NcupLetterY);
+
+    final Rect NcupLetterRect = Rect.fromCenter(
+      center: Offset(NcupWidth / 2, NcupHeight / 2),
+      width: NcupLetterPainter.width * 1.4,
+      height: NcupLetterPainter.height * 1.6,
+    );
+
+    final Paint NcupGlowPaint = Paint()
+      ..maskFilter = MaskFilter.blur(
+        BlurStyle.normal,
+        28 + 24 * NcupPulse,
+      )
+      ..color = Colors.red.withOpacity(0.7 + 0.2 * NcupPulse);
+
+    NcupCanvas.saveLayer(NcupLetterRect, NcupGlowPaint);
+    NcupLetterPainter.paint(NcupCanvas, NcupLetterOffset);
+    NcupCanvas.restore();
+
+    NcupLetterPainter.paint(NcupCanvas, NcupLetterOffset);
+
+    final double NcupCupFontSize = NcupWidth * 0.11;
+
+    final TextPainter NcupCupPainterReal = TextPainter(
+      text: TextSpan(
+        text: NcupWord,
+        style: TextStyle(
+          fontSize: NcupCupFontSize,
+          fontWeight: FontWeight.w600,
+          color: Colors.red.shade100.withOpacity(0.95),
+          letterSpacing: 5,
+          shadows: <Shadow>[
+            Shadow(
+              color: Colors.redAccent.withOpacity(0.7),
+              blurRadius: 12 + 10 * NcupPulse,
+              offset: const Offset(0, 0),
+            ),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: NcupWidth);
+
+    final double NcupCupX = (NcupWidth - NcupCupPainterReal.width) / 2;
+    final double NcupCupY =
+        NcupLetterY + NcupLetterPainter.height + NcupHeight * 0.03;
+
+    final Offset NcupCupOffset = Offset(NcupCupX, NcupCupY);
+    NcupCupPainterReal.paint(NcupCanvas, NcupCupOffset);
   }
-}
 
-extension _LoungeOfIdlenessDoubleSin on double {
-  double sin() => math.sin(this);
+  @override
+  bool shouldRepaint(covariant NcupLoaderPainter NcupOldDelegate) =>
+      NcupOldDelegate.NcupPhase != NcupPhase;
 }
 
 // ============================================================================
-// Статистика
+// Статистика (NcupFinalUrl / NcupPostStat) — строки не меняем
 // ============================================================================
 
-Future<String> loungeOfIdlenessFinalUrl(
-    String loungeOfIdlenessStartUrl, {
-      int maxHops = 10,
+Future<String> NcupFinalUrl(
+    String NcupStartUrl, {
+      int NcupMaxHops = 10,
     }) async {
-  final HttpClient loungeOfIdlenessClient = HttpClient();
+  final HttpClient NcupClient = HttpClient();
 
   try {
-    Uri loungeOfIdlenessCurrentUri = Uri.parse(loungeOfIdlenessStartUrl);
+    Uri NcupCurrentUri = Uri.parse(NcupStartUrl);
 
-    for (int loungeOfIdlenessI = 0;
-    loungeOfIdlenessI < maxHops;
-    loungeOfIdlenessI++) {
-      final HttpClientRequest loungeOfIdlenessRequest =
-      await loungeOfIdlenessClient.getUrl(loungeOfIdlenessCurrentUri);
-      loungeOfIdlenessRequest.followRedirects = false;
-      final HttpClientResponse loungeOfIdlenessResponse =
-      await loungeOfIdlenessRequest.close();
+    for (int NcupI = 0; NcupI < NcupMaxHops; NcupI++) {
+      final HttpClientRequest NcupRequest =
+      await NcupClient.getUrl(NcupCurrentUri);
+      NcupRequest.followRedirects = false;
+      final HttpClientResponse NcupResponse = await NcupRequest.close();
 
-      if (loungeOfIdlenessResponse.isRedirect) {
-        final String? loungeOfIdlenessLoc =
-        loungeOfIdlenessResponse.headers
-            .value(HttpHeaders.locationHeader);
-        if (loungeOfIdlenessLoc == null ||
-            loungeOfIdlenessLoc.isEmpty) break;
+      if (NcupResponse.isRedirect) {
+        final String? NcupLoc =
+        NcupResponse.headers.value(HttpHeaders.locationHeader);
+        if (NcupLoc == null || NcupLoc.isEmpty) break;
 
-        final Uri loungeOfIdlenessNextUri =
-        Uri.parse(loungeOfIdlenessLoc);
-        loungeOfIdlenessCurrentUri = loungeOfIdlenessNextUri.hasScheme
-            ? loungeOfIdlenessNextUri
-            : loungeOfIdlenessCurrentUri
-            .resolveUri(loungeOfIdlenessNextUri);
+        final Uri NcupNextUri = Uri.parse(NcupLoc);
+        NcupCurrentUri = NcupNextUri.hasScheme
+            ? NcupNextUri
+            : NcupCurrentUri.resolveUri(NcupNextUri);
         continue;
       }
 
-      return loungeOfIdlenessCurrentUri.toString();
+      return NcupCurrentUri.toString();
     }
 
-    return loungeOfIdlenessCurrentUri.toString();
-  } catch (loungeOfIdlenessError) {
-    debugPrint('wheelFinalUrl error: $loungeOfIdlenessError');
-    return loungeOfIdlenessStartUrl;
+    return NcupCurrentUri.toString();
+  } catch (NcupError) {
+    debugPrint('wheelFinalUrl error: $NcupError');
+    return NcupStartUrl;
   } finally {
-    loungeOfIdlenessClient.close(force: true);
+    NcupClient.close(force: true);
   }
 }
 
-Future<void> loungeOfIdlenessPostStat({
-  required String event,
-  required int timeStart,
-  required String url,
-  required int timeFinish,
-  required String appSid,
-  int? firstPageTs,
+Future<void> NcupPostStat({
+  required String NcupEvent,
+  required int NcupTimeStart,
+  required String NcupUrl,
+  required int NcupTimeFinish,
+  required String NcupAppSid,
+  int? NcupFirstPageTs,
 }) async {
   try {
-    final String loungeOfIdlenessResolvedUrl =
-    await loungeOfIdlenessFinalUrl(url);
-    final Map<String, dynamic> loungeOfIdlenessPayload =
-    <String, dynamic>{
-      'event': event,
-      'timestart': timeStart,
-      'timefinsh': timeFinish,
-      'url': loungeOfIdlenessResolvedUrl,
+    final String NcupResolvedUrl = await NcupFinalUrl(NcupUrl);
+    final Map<String, dynamic> NcupPayload = <String, dynamic>{
+      'event': NcupEvent,
+      'timestart': NcupTimeStart,
+      'timefinsh': NcupTimeFinish,
+      'url': NcupResolvedUrl,
       'appleID': '6755681349',
-      'open_count': '$appSid/$timeStart',
+      'open_count': '$NcupAppSid/$NcupTimeStart',
     };
 
-    debugPrint('wheelStat $loungeOfIdlenessPayload');
+    debugPrint('wheelStat $NcupPayload');
 
-    final http.Response loungeOfIdlenessResp = await http.post(
-      Uri.parse('$loungeOfIdlenessStatEndpoint/$appSid'),
+    final http.Response NcupResp = await http.post(
+      Uri.parse('$MetrStatEndpoint/$NcupAppSid'),
       headers: <String, String>{
         'Content-Type': 'application/json',
       },
-      body: jsonEncode(loungeOfIdlenessPayload),
+      body: jsonEncode(NcupPayload),
     );
 
-    debugPrint(
-        'wheelStat resp=${loungeOfIdlenessResp.statusCode} body=${loungeOfIdlenessResp.body}');
-  } catch (loungeOfIdlenessError) {
-    debugPrint('wheelPostStat error: $loungeOfIdlenessError');
+    debugPrint('wheelStat resp=${NcupResp.statusCode} body=${NcupResp.body}');
+  } catch (NcupError) {
+    debugPrint('wheelPostStat error: $NcupError');
   }
 }
 
 // ============================================================================
-// WebView-экран: LoungeOfIdlenessTableView
+// WebView-экран: NcupTableView (бывший DressRetroTableView)
+// С ДОБАВЛЕННЫМ функционалом: соцсети, банки, UserAgent, SafeArea, localStorage, popup.
 // ============================================================================
 
-class LoungeOfIdlenessTableView extends StatefulWidget
-    with WidgetsBindingObserver {
-  String loungeOfIdlenessStartingUrl;
-  LoungeOfIdlenessTableView(this.loungeOfIdlenessStartingUrl, {super.key});
+class NcupTableView extends StatefulWidget with WidgetsBindingObserver {
+  String NcupStartingUrl;
+  NcupTableView(this.NcupStartingUrl, {super.key});
 
   @override
-  State<LoungeOfIdlenessTableView> createState() =>
-      _LoungeOfIdlenessTableViewState(loungeOfIdlenessStartingUrl);
+  State<NcupTableView> createState() => _NcupTableViewState(NcupStartingUrl);
 }
 
-class _LoungeOfIdlenessTableViewState
-    extends State<LoungeOfIdlenessTableView> with WidgetsBindingObserver {
-  _LoungeOfIdlenessTableViewState(this.loungeOfIdlenessCurrentUrl);
+class _NcupTableViewState extends State<NcupTableView>
+    with WidgetsBindingObserver {
+  _NcupTableViewState(this.NcupCurrentUrl);
 
-  final LoungeOfIdlenessVault loungeOfIdlenessVault =
-  LoungeOfIdlenessVault();
+  final NcupVault NcupVaultInstance = NcupVault();
 
-  late InAppWebViewController loungeOfIdlenessWebViewController;
-  String? loungeOfIdlenessPushToken;
-  final LoungeOfIdlenessDeviceProfile loungeOfIdlenessDeviceProfile =
-  LoungeOfIdlenessDeviceProfile();
-  final LoungeOfIdlenessSpy loungeOfIdlenessSpy =
-  LoungeOfIdlenessSpy();
+  late InAppWebViewController NcupWebViewController;
+  String? NcupPushToken;
+  final NcupDeviceProfile NcupDeviceProfileInstance = NcupDeviceProfile();
+  final NcupSpy NcupSpyInstance = NcupSpy();
 
-  bool loungeOfIdlenessOverlayBusy = false;
-  String loungeOfIdlenessCurrentUrl;
-  DateTime? loungeOfIdlenessLastPausedAt;
+  bool NcupOverlayBusy = false;
+  String NcupCurrentUrl;
+  DateTime? NcupLastPausedAt;
 
-  bool loungeOfIdlenessLoadedOnceSent = false;
-  int? loungeOfIdlenessFirstPageTimestamp;
-  int loungeOfIdlenessStartLoadTimestamp = 0;
+  bool NcupLoadedOnceSent = false;
+  int? NcupFirstPageTimestamp;
+  int NcupStartLoadTimestamp = 0;
 
-  final Set<String> loungeOfIdlenessExternalHosts = <String>{
+  // --------- Социальные / внешние хосты / схемы ---------
+
+  final Set<String> NcupExternalHosts = <String>{
     't.me',
     'telegram.me',
     'telegram.dog',
@@ -643,7 +769,7 @@ class _LoungeOfIdlenessTableViewState
     'www.x.com',
   };
 
-  final Set<String> loungeOfIdlenessExternalSchemes = <String>{
+  final Set<String> NcupExternalSchemes = <String>{
     'tg',
     'telegram',
     'whatsapp',
@@ -654,22 +780,62 @@ class _LoungeOfIdlenessTableViewState
     'mailto',
   };
 
+  // расширенный набор "специальных схем" как в первом main.dart
+  final Set<String> NcupSpecialSchemes = <String>{
+    'tg',
+    'telegram',
+    'whatsapp',
+    'viber',
+    'skype',
+    'fb-messenger',
+    'sgnl',
+    'tel',
+    'mailto',
+    'bnl',
+  };
+
+  // --------- UserAgent + SafeArea ---------
+
+  String? _baseUserAgent;
+  String _currentUserAgent = '';
+  String? _serverUserAgent;
+  bool _isInGoogleAuth = false;
+
+  bool _safeAreaEnabled = false;
+  Color _safeAreaBackgroundColor = Colors.black;
+
+  // --------- POPUP (window.open) ---------
+
+  InAppWebViewController? _popupWebViewController;
+  bool _isPopupVisible = false;
+  String? _popupUrl;
+  CreateWindowAction? _popupCreateAction;
+  bool _popupCanGoBack = false;
+  String? _popupCurrentUrl;
+
   @override
   void initState() {
     super.initState();
 
     WidgetsBinding.instance.addObserver(this);
-    FirebaseMessaging.onBackgroundMessage(
-        loungeOfIdlenessFcmBackgroundHandler);
+    FirebaseMessaging.onBackgroundMessage(NcupFcmBackgroundHandler);
 
-    loungeOfIdlenessFirstPageTimestamp =
-        DateTime.now().millisecondsSinceEpoch;
+    NcupFirstPageTimestamp = DateTime.now().millisecondsSinceEpoch;
 
-    loungeOfIdlenessInitPushAndGetToken();
-    loungeOfIdlenessDeviceProfile.loungeOfIdlenessInitialize();
-    loungeOfIdlenessWireForegroundPushHandlers();
-    loungeOfIdlenessBindPlatformNotificationTap();
-    loungeOfIdlenessSpy.loungeOfIdlenessStart(onUpdate: () {
+    // НОВОЕ: загружаем сохранённые SafeArea/цвет из SharedPreferences
+    _loadSafeAreaFromPrefs();
+
+    NcupInitPushAndGetToken();
+
+    // Инициализируем профиль устройства и после этого пишем в localStorage
+    NcupDeviceProfileInstance.NcupInitialize().then((_) async {
+      if (!mounted) return;
+
+    });
+
+    NcupWireForegroundPushHandlers();
+    NcupBindPlatformNotificationTap();
+    NcupSpyInstance.NcupStart(NcupOnUpdate: () {
       if (mounted) setState(() {});
     });
   }
@@ -681,31 +847,27 @@ class _LoungeOfIdlenessTableViewState
   }
 
   @override
-  void didChangeAppLifecycleState(
-      AppLifecycleState loungeOfIdlenessState) {
-    if (loungeOfIdlenessState == AppLifecycleState.paused) {
-      loungeOfIdlenessLastPausedAt = DateTime.now();
+  void didChangeAppLifecycleState(AppLifecycleState NcupState) {
+    if (NcupState == AppLifecycleState.paused) {
+      NcupLastPausedAt = DateTime.now();
     }
-    if (loungeOfIdlenessState == AppLifecycleState.resumed) {
-      if (Platform.isIOS && loungeOfIdlenessLastPausedAt != null) {
-        final DateTime loungeOfIdlenessNow = DateTime.now();
-        final Duration loungeOfIdlenessDrift =
-        loungeOfIdlenessNow.difference(
-            loungeOfIdlenessLastPausedAt!);
-        if (loungeOfIdlenessDrift > const Duration(minutes: 25)) {
-          loungeOfIdlenessForceReloadToLobby();
+    if (NcupState == AppLifecycleState.resumed) {
+      if (Platform.isIOS && NcupLastPausedAt != null) {
+        final DateTime NcupNow = DateTime.now();
+        final Duration NcupDrift = NcupNow.difference(NcupLastPausedAt!);
+        if (NcupDrift > const Duration(minutes: 25)) {
+          NcupForceReloadToLobby();
         }
       }
-      loungeOfIdlenessLastPausedAt = null;
+      NcupLastPausedAt = null;
     }
   }
 
-  void loungeOfIdlenessForceReloadToLobby() {
+  void NcupForceReloadToLobby() {
     if (!mounted) return;
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+    WidgetsBinding.instance.addPostFrameCallback((Duration NcupDuration) {
       if (!mounted) return;
-      // Здесь можно вернуть в лобби (MafiaHarbor / CaptainHarbor / BillHarbor),
-      // если нужно.
+      // здесь можно вернуть в MafiaHarbor/CaptainHarbor/BillHarbor при необходимости
     });
   }
 
@@ -713,106 +875,613 @@ class _LoungeOfIdlenessTableViewState
   // Push / FCM
   // --------------------------------------------------------------------------
 
-  void loungeOfIdlenessWireForegroundPushHandlers() {
-    FirebaseMessaging.onMessage.listen(
-            (RemoteMessage loungeOfIdlenessMsg) {
-          if (loungeOfIdlenessMsg.data['uri'] != null) {
-            loungeOfIdlenessNavigateTo(
-                loungeOfIdlenessMsg.data['uri'].toString());
-          } else {
-            loungeOfIdlenessReturnToCurrentUrl();
-          }
-        });
+  void NcupWireForegroundPushHandlers() {
+    FirebaseMessaging.onMessage.listen((RemoteMessage NcupMsg) {
+      if (NcupMsg.data['uri'] != null) {
+        NcupNavigateTo(NcupMsg.data['uri'].toString());
+      } else {
+        NcupReturnToCurrentUrl();
+      }
+    });
 
-    FirebaseMessaging.onMessageOpenedApp.listen(
-            (RemoteMessage loungeOfIdlenessMsg) {
-          if (loungeOfIdlenessMsg.data['uri'] != null) {
-            loungeOfIdlenessNavigateTo(
-                loungeOfIdlenessMsg.data['uri'].toString());
-          } else {
-            loungeOfIdlenessReturnToCurrentUrl();
-          }
-        });
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage NcupMsg) {
+      if (NcupMsg.data['uri'] != null) {
+        NcupNavigateTo(NcupMsg.data['uri'].toString());
+      } else {
+        NcupReturnToCurrentUrl();
+      }
+    });
   }
 
-  void loungeOfIdlenessNavigateTo(String loungeOfIdlenessNewUrl) async {
-    await loungeOfIdlenessWebViewController.loadUrl(
-      urlRequest: URLRequest(url: WebUri(loungeOfIdlenessNewUrl)),
+  void NcupNavigateTo(String NcupNewUrl) async {
+    await NcupWebViewController.loadUrl(
+      urlRequest: URLRequest(url: WebUri(NcupNewUrl)),
     );
   }
 
-  void loungeOfIdlenessReturnToCurrentUrl() async {
+  void NcupReturnToCurrentUrl() async {
     Future<void>.delayed(const Duration(seconds: 3), () {
-      loungeOfIdlenessWebViewController.loadUrl(
-        urlRequest: URLRequest(url: WebUri(loungeOfIdlenessCurrentUrl)),
+      NcupWebViewController.loadUrl(
+        urlRequest: URLRequest(url: WebUri(NcupCurrentUrl)),
       );
     });
   }
 
-  Future<void> loungeOfIdlenessInitPushAndGetToken() async {
-    final FirebaseMessaging loungeOfIdlenessFm =
-        FirebaseMessaging.instance;
-
-    final NotificationSettings loungeOfIdlenessSettings =
-    await loungeOfIdlenessFm.getNotificationSettings();
-    if (loungeOfIdlenessSettings.authorizationStatus ==
-        AuthorizationStatus.notDetermined ||
-        loungeOfIdlenessSettings.authorizationStatus ==
-            AuthorizationStatus.denied) {
-      await loungeOfIdlenessFm.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-    }
-
-    loungeOfIdlenessPushToken =
-    await loungeOfIdlenessFm.getToken();
-
-    try {
-      final NotificationSettings loungeOfIdlenessUpdatedSettings =
-      await loungeOfIdlenessFm.getNotificationSettings();
-      loungeOfIdlenessDeviceProfile.loungeOfIdlenessPushEnabled =
-          loungeOfIdlenessUpdatedSettings.authorizationStatus ==
-              AuthorizationStatus.authorized ||
-              loungeOfIdlenessUpdatedSettings.authorizationStatus ==
-                  AuthorizationStatus.provisional;
-    } catch (_) {
-      loungeOfIdlenessDeviceProfile.loungeOfIdlenessPushEnabled =
-      false;
-    }
+  Future<void> NcupInitPushAndGetToken() async {
+    final FirebaseMessaging NcupFm = FirebaseMessaging.instance;
+    await NcupFm.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    NcupPushToken = await NcupFm.getToken();
   }
 
   // --------------------------------------------------------------------------
   // Привязка канала: тап по уведомлению из native
   // --------------------------------------------------------------------------
 
-  void loungeOfIdlenessBindPlatformNotificationTap() {
+  void NcupBindPlatformNotificationTap() {
     MethodChannel('com.example.fcm/notification')
-        .setMethodCallHandler((MethodCall loungeOfIdlenessCall) async {
-      if (loungeOfIdlenessCall.method == "onNotificationTap") {
-        final Map<String, dynamic> loungeOfIdlenessPayload =
-        Map<String, dynamic>.from(
-            loungeOfIdlenessCall.arguments);
-        debugPrint(
-            "URI from platform tap: ${loungeOfIdlenessPayload['uri']}");
-        final String? loungeOfIdlenessUriString =
-        loungeOfIdlenessPayload["uri"]?.toString();
-        if (loungeOfIdlenessUriString != null &&
-            !loungeOfIdlenessUriString.contains("Нет URI")) {
+        .setMethodCallHandler((MethodCall NcupCall) async {
+      if (NcupCall.method == "onNotificationTap") {
+        final Map<String, dynamic> NcupPayload =
+        Map<String, dynamic>.from(NcupCall.arguments);
+        debugPrint("URI from platform tap: ${NcupPayload['uri']}");
+        final String? NcupUriString = NcupPayload["uri"]?.toString();
+        if (NcupUriString != null && !NcupUriString.contains("Нет URI")) {
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute<Widget>(
-              builder:
-                  (BuildContext loungeOfIdlenessContext) =>
-                  LoungeOfIdlenessTableView(
-                      loungeOfIdlenessUriString),
+              builder: (BuildContext NcupContext) =>
+                  NcupTableView(NcupUriString),
             ),
-                (Route<dynamic> loungeOfIdlenessRoute) => false,
+                (Route<dynamic> NcupRoute) => false,
           );
         }
       }
     });
+  }
+
+  // --------------------------------------------------------------------------
+  // localStorage: запись профиля устройства
+  // --------------------------------------------------------------------------
+
+
+
+  // === НОВОЕ: восстановление app_data из SharedPreferences в localStorage ===
+  Future<void> _restoreAppDataFromPrefsToLocalStorage() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? savedJson = prefs.getString('app_data');
+      if (savedJson == null || savedJson.isEmpty) {
+        return;
+      }
+
+      // savedJson — это JSON-строка; кладём её в JS как объект через JSON.stringify(...)
+      final String js =
+          "localStorage.setItem('app_data', JSON.stringify($savedJson));";
+
+      await NcupWebViewController.evaluateJavascript(source: js);
+
+      NcupVaultInstance.NcupLoggerInstance.NcupLogInfo(
+          'app_data restored from SharedPreferences to localStorage: $savedJson');
+    } catch (e, st) {
+      NcupVaultInstance.NcupLoggerInstance.NcupLogError(
+          '_restoreAppDataFromPrefsToLocalStorage error: $e\n$st');
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // UserAgent / SafeArea helpers (адаптировано из первого main.dart)
+  // --------------------------------------------------------------------------
+
+  bool _isGoogleUrl(Uri uri) {
+    final String full = uri.toString().toLowerCase();
+    return full.contains('google');
+  }
+
+  Future<void> _applyUserAgent({String? fullua, String? uatail}) async {
+    // Берём базовый UA из WebView, если ещё не взяли
+    if (_baseUserAgent == null || _baseUserAgent!.trim().isEmpty) {
+      try {
+        final ua = await NcupWebViewController.evaluateJavascript(
+          source: "navigator.userAgent",
+        );
+        if (ua is String && ua.trim().isNotEmpty) {
+          _baseUserAgent = ua.trim();
+          _currentUserAgent = _baseUserAgent!;
+          NcupDeviceProfileInstance.NcupBaseUserAgent = _baseUserAgent;
+          NcupVaultInstance.NcupLoggerInstance.NcupLogInfo(
+              'Base User-Agent detected: $_baseUserAgent');
+        }
+      } catch (e) {
+        NcupVaultInstance.NcupLoggerInstance
+            .NcupLogWarn('Failed to get base userAgent from JS: $e');
+      }
+    }
+
+    if (_baseUserAgent == null || _baseUserAgent!.trim().isEmpty) {
+      NcupVaultInstance.NcupLoggerInstance
+          .NcupLogWarn('Base User-Agent is null, skip UA update');
+      return;
+    }
+
+    String newUa;
+    if (fullua != null && fullua.trim().isNotEmpty) {
+      newUa = fullua.trim();
+    } else if (uatail != null && uatail.trim().isNotEmpty) {
+      newUa = "${_baseUserAgent!}/${uatail.trim()}";
+    } else {
+      newUa = _baseUserAgent!;
+    }
+
+    _serverUserAgent = newUa;
+    NcupVaultInstance.NcupLoggerInstance
+        .NcupLogInfo('Server UA calculated: $_serverUserAgent');
+  }
+
+  Future<void> _updateUserAgentFromServerPayload(
+      Map<dynamic, dynamic> root) async {
+    String? fullua;
+    String? uatail;
+
+    final dynamic content = root['content'];
+    if (content is Map) {
+      if (content['fullua'] != null &&
+          content['fullua'].toString().trim().isNotEmpty) {
+        fullua = content['fullua'].toString().trim();
+      }
+      if (content['uatail'] != null &&
+          content['uatail'].toString().trim().isNotEmpty) {
+        uatail = content['uatail'].toString().trim();
+      }
+    }
+
+    if (fullua == null &&
+        root['fullua'] != null &&
+        root['fullua'].toString().trim().isNotEmpty) {
+      fullua = root['fullua'].toString().trim();
+    }
+    if (uatail == null &&
+        root['uatail'] != null &&
+        root['uatail'].toString().trim().isNotEmpty) {
+      uatail = root['uatail'].toString().trim();
+    }
+
+    if (uatail == null) {
+      final dynamic adata = root['adata'];
+      if (adata is Map &&
+          adata['uatail'] != null &&
+          adata['uatail'].toString().trim().isNotEmpty) {
+        uatail = adata['uatail'].toString().trim();
+      }
+    }
+
+    await _applyUserAgent(fullua: fullua, uatail: uatail);
+  }
+
+  Future<void> _applyNormalUserAgentIfNeeded() async {
+    if (_isInGoogleAuth) {
+      NcupVaultInstance.NcupLoggerInstance.NcupLogInfo(
+          'Skip normal UA apply because we are in Google auth');
+      return;
+    }
+
+    final String targetUa = _serverUserAgent ?? _baseUserAgent ?? 'random';
+
+    if (targetUa == _currentUserAgent) return;
+
+    try {
+      await NcupWebViewController.setSettings(
+        settings: InAppWebViewSettings(userAgent: targetUa),
+      );
+      _currentUserAgent = targetUa;
+      debugPrint('[UA] NORMAL WEBVIEW USER AGENT: $_currentUserAgent');
+    } catch (e) {
+      NcupVaultInstance.NcupLoggerInstance
+          .NcupLogError('Error while setting UA "$targetUa": $e');
+    }
+  }
+
+  Future<void> _addRandomToUserAgentForGoogle() async {
+    const String targetUa = 'random';
+    if (_currentUserAgent == targetUa && _isInGoogleAuth) return;
+
+    try {
+      await NcupWebViewController.setSettings(
+        settings: InAppWebViewSettings(userAgent: targetUa),
+      );
+      _currentUserAgent = targetUa;
+      _isInGoogleAuth = true;
+      debugPrint('[UA] GOOGLE RANDOM USER AGENT: $_currentUserAgent');
+    } catch (e) {
+      NcupVaultInstance.NcupLoggerInstance
+          .NcupLogError('Error setting RANDOM UA for Google: $e');
+    }
+  }
+
+  Future<void> _restoreUserAgentAfterGoogleIfNeeded() async {
+    if (!_isInGoogleAuth) return;
+    _isInGoogleAuth = false;
+    await _applyNormalUserAgentIfNeeded();
+  }
+
+  // Хелпер для парсинга HEX‑цвета (общий для SafeArea и prefs)
+  Color _parseHexColor(String hex, {Color fallback = const Color(0xFF1A1A22)}) {
+    String value = hex.trim();
+    if (value.startsWith('#')) value = value.substring(1);
+    if (value.length == 6) value = 'FF$value';
+    final intColor = int.tryParse(value, radix: 16);
+    if (intColor == null) return fallback;
+    return Color(intColor);
+  }
+
+  // НОВОЕ: загрузка SafeArea из SharedPreferences при старте
+  Future<void> _loadSafeAreaFromPrefs() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final bool enabled = prefs.getBool(NcupSafeAreaEnabledKey) ?? false;
+      final String colorHex = prefs.getString(NcupSafeAreaColorKey) ?? '';
+
+      Color bg = Colors.black;
+      if (enabled) {
+        if (colorHex.isNotEmpty) {
+          bg = _parseHexColor(colorHex, fallback: const Color(0xFF1A1A22));
+        } else {
+          bg = const Color(0xFF1A1A22);
+        }
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _safeAreaEnabled = enabled;
+        _safeAreaBackgroundColor = bg;
+        NcupDeviceProfileInstance.NcupSafeAreaEnabled = enabled;
+        NcupDeviceProfileInstance.NcupSafeAreaColor =
+        enabled ? (colorHex.isNotEmpty ? colorHex : '#1A1A22') : '';
+      });
+
+      NcupVaultInstance.NcupLoggerInstance.NcupLogInfo(
+          'SafeArea loaded from prefs: enabled=$enabled, color="$colorHex"');
+    } catch (e, st) {
+      NcupVaultInstance.NcupLoggerInstance
+          .NcupLogError('_loadSafeAreaFromPrefs error: $e\n$st');
+    }
+  }
+
+  void _updateSafeAreaFromServerPayload(Map<dynamic, dynamic> root) {
+    bool? safearea;
+    String? bgLightHex;
+    String? bgDarkHex;
+
+    final dynamic content = root['content'];
+    if (content is Map) {
+      if (content['safearea'] != null) {
+        final dynamic raw = content['safearea'];
+        if (raw is bool) {
+          safearea = raw;
+        } else if (raw is String) {
+          final String v = raw.toLowerCase().trim();
+          if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+          if (v == 'false' || v == '0' || v == 'no') safearea = false;
+        } else if (raw is num) {
+          safearea = raw != 0;
+        }
+      }
+
+      if (content['safearea_color'] != null &&
+          content['safearea_color'].toString().trim().isNotEmpty) {
+        bgLightHex = content['safearea_color'].toString().trim();
+        bgDarkHex = bgLightHex;
+      }
+    }
+
+    final dynamic adata = root['adata'];
+    if (adata is Map) {
+      if (safearea == null && adata['safearea'] != null) {
+        final dynamic raw = adata['safearea'];
+        if (raw is bool) {
+          safearea = raw;
+        } else if (raw is String) {
+          final String v = raw.toLowerCase().trim();
+          if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+          if (v == 'false' || v == '0' || v == 'no') safearea = false;
+        } else if (raw is num) {
+          safearea = raw != 0;
+        }
+      }
+
+      if (adata['bgsareaw'] != null &&
+          adata['bgsareaw'].toString().trim().isNotEmpty) {
+        bgLightHex = adata['bgsareaw'].toString().trim();
+      }
+      if (adata['bgsareab'] != null &&
+          adata['bgsareab'].toString().trim().isNotEmpty) {
+        bgDarkHex = adata['bgsareab'].toString().trim();
+      }
+    }
+
+    if (safearea == null && root['safearea'] != null) {
+      final dynamic raw = root['safearea'];
+      if (raw is bool) {
+        safearea = raw;
+      } else if (raw is String) {
+        final String v = raw.toLowerCase().trim();
+        if (v == 'true' || v == '1' || v == 'yes') safearea = true;
+        if (v == 'false' || v == '0' || v == 'no') safearea = false;
+      } else if (raw is num) {
+        safearea = raw != 0;
+      }
+    }
+
+    if (safearea == null) return;
+
+    final Brightness platformBrightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+
+    String? chosenHex;
+    if (platformBrightness == Brightness.light) {
+      chosenHex = bgLightHex ?? bgDarkHex;
+    } else {
+      chosenHex = bgDarkHex ?? bgLightHex;
+    }
+
+    Color background = safearea ? const Color(0xFF1A1A22) : Colors.black;
+
+    if (safearea && chosenHex != null && chosenHex.isNotEmpty) {
+      background = _parseHexColor(chosenHex, fallback: const Color(0xFF1A1A22));
+    }
+
+    setState(() {
+      _safeAreaEnabled = safearea!;
+      _safeAreaBackgroundColor = background;
+      NcupDeviceProfileInstance.NcupSafeAreaEnabled = safearea;
+      NcupDeviceProfileInstance.NcupSafeAreaColor =
+      safearea ? (chosenHex ?? '#1A1A22') : '';
+    });
+
+    // НОВОЕ: сохраняем SafeArea в SharedPreferences при каждом обновлении
+    () async {
+      try {
+        final SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(NcupSafeAreaEnabledKey, safearea!);
+        await prefs.setString(
+          NcupSafeAreaColorKey,
+          NcupDeviceProfileInstance.NcupSafeAreaColor ?? '',
+        );
+        NcupVaultInstance.NcupLoggerInstance.NcupLogInfo(
+          'SafeArea saved to prefs: enabled=$safearea, color="${NcupDeviceProfileInstance.NcupSafeAreaColor}"',
+        );
+      } catch (e, st) {
+        NcupVaultInstance.NcupLoggerInstance
+            .NcupLogError('Error saving SafeArea to prefs: $e\n$st');
+      }
+    }();
+  }
+
+  // --------------------------------------------------------------------------
+  // POPUP helpers
+  // --------------------------------------------------------------------------
+
+  InAppWebViewSettings _popupSettings() {
+    return InAppWebViewSettings(
+      javaScriptEnabled: true,
+      disableDefaultErrorPage: true,
+      mediaPlaybackRequiresUserGesture: false,
+      allowsInlineMediaPlayback: true,
+      allowsPictureInPictureMediaPlayback: true,
+      useOnDownloadStart: true,
+      javaScriptCanOpenWindowsAutomatically: true,
+      useShouldOverrideUrlLoading: true,
+      supportMultipleWindows: true,
+      transparentBackground: false,
+      thirdPartyCookiesEnabled: true,
+      sharedCookiesEnabled: true,
+      domStorageEnabled: true,
+      databaseEnabled: true,
+      cacheEnabled: true,
+      mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+      allowsBackForwardNavigationGestures: true,
+    );
+  }
+
+  void _openPopup(CreateWindowAction req, {String? urlString}) {
+    setState(() {
+      _popupCreateAction = req;
+      _popupUrl = (urlString != null && urlString.isNotEmpty)
+          ? urlString
+          : req.request.url?.toString();
+      _popupCurrentUrl = _popupUrl;
+      _isPopupVisible = true;
+      _popupCanGoBack = false;
+    });
+  }
+
+  void _closePopup() {
+    setState(() {
+      _isPopupVisible = false;
+      _popupUrl = null;
+      _popupCurrentUrl = null;
+      _popupCreateAction = null;
+      _popupCanGoBack = false;
+      _popupWebViewController = null;
+    });
+  }
+
+  Future<void> _refreshPopupCanGoBack() async {
+    final InAppWebViewController? c = _popupWebViewController;
+    if (c == null) {
+      if (_popupCanGoBack && mounted) {
+        setState(() {
+          _popupCanGoBack = false;
+        });
+      }
+      return;
+    }
+    try {
+      final bool can = await c.canGoBack();
+      if (!mounted) return;
+      if (can != _popupCanGoBack) {
+        setState(() {
+          _popupCanGoBack = can;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handlePopupBackPressed() async {
+    final InAppWebViewController? c = _popupWebViewController;
+    if (c == null) {
+      _closePopup();
+      return;
+    }
+    try {
+      if (await c.canGoBack()) {
+        await c.goBack();
+        Future<void>.delayed(const Duration(milliseconds: 200), () {
+          _refreshPopupCanGoBack();
+        });
+      } else {
+        _closePopup();
+      }
+    } catch (_) {
+      _closePopup();
+    }
+  }
+
+  Widget _buildPopupOverlay() {
+    if (!_isPopupVisible || (_popupUrl == null && _popupCreateAction == null)) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.96),
+        child: Column(
+          children: [
+            SafeArea(
+              bottom: false,
+              child: Container(
+                color: Colors.black,
+                height: 48,
+                child: Row(
+                  children: [
+                    if (_popupCanGoBack)
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        onPressed: _handlePopupBackPressed,
+                      )
+                    else
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: _closePopup,
+                      ),
+                    const SizedBox(width: 8),
+
+                  ],
+                ),
+              ),
+            ),
+            const Divider(height: 1, color: Colors.white24),
+            Expanded(
+              child: InAppWebView(
+                windowId: _popupCreateAction?.windowId,
+                initialUrlRequest:
+                (_popupCreateAction?.windowId == null && _popupUrl != null)
+                    ? URLRequest(url: WebUri(_popupUrl!))
+                    : null,
+                initialSettings: _popupSettings(),
+                onWebViewCreated: (InAppWebViewController controller) async {
+                  _popupWebViewController = controller;
+                },
+                onLoadStart: (controller, uri) async {
+                  if (uri != null) {
+                    setState(() {
+                      _popupCurrentUrl = uri.toString();
+                    });
+                  }
+                  await _refreshPopupCanGoBack();
+                },
+                onPermissionRequest: (controller, request) async {
+                  return PermissionResponse(
+                    resources: request.resources,
+                    action: PermissionResponseAction.GRANT,
+                  );
+                },
+                onLoadStop: (controller, uri) async {
+                  if (uri != null) {
+                    setState(() {
+                      _popupCurrentUrl = uri.toString();
+                    });
+                  }
+                  await _refreshPopupCanGoBack();
+                },
+                onUpdateVisitedHistory:
+                    (controller, url, isReload) async {
+                  if (url != null) {
+                    setState(() {
+                      _popupCurrentUrl = url.toString();
+                    });
+                  }
+                  await _refreshPopupCanGoBack();
+                },
+                shouldOverrideUrlLoading: (
+                    InAppWebViewController controller,
+                    NavigationAction nav,
+                    ) async {
+                  final Uri? uri = nav.request.url;
+                  if (uri == null) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
+                  final String scheme = uri.scheme.toLowerCase();
+
+                  if (NcupKit.NcupLooksLikeBareMail(uri)) {
+                    final Uri mailto = NcupKit.NcupToMailto(uri);
+                    await NcupLinker.NcupOpen(NcupKit.NcupGmailize(mailto));
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme == 'mailto') {
+                    await NcupLinker.NcupOpen(NcupKit.NcupGmailize(uri));
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme == 'tel') {
+                    await launchUrl(
+                      uri,
+                      mode: LaunchMode.externalApplication,
+                    );
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (NcupIsBankScheme(uri) ||
+                      ((scheme == 'http' || scheme == 'https') &&
+                          NcupIsBankDomain(uri))) {
+                    await NcupOpenBank(uri);
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  if (scheme != 'http' && scheme != 'https') {
+                    return NavigationActionPolicy.CANCEL;
+                  }
+
+                  return NavigationActionPolicy.ALLOW;
+                },
+                onCloseWindow: (controller) {
+                  _closePopup();
+                },
+                onDownloadStartRequest: (controller, req) async {
+                  await NcupLinker.NcupOpen(req.url);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -821,284 +1490,338 @@ class _LoungeOfIdlenessTableViewState
 
   @override
   Widget build(BuildContext context) {
-    loungeOfIdlenessBindPlatformNotificationTap();
+    NcupBindPlatformNotificationTap();
 
-    final bool loungeOfIdlenessIsDark =
-        MediaQuery.of(context).platformBrightness ==
-            Brightness.dark;
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: loungeOfIdlenessIsDark
-          ? SystemUiOverlayStyle.dark
-          : SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          children: <Widget>[
-            InAppWebView(
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                disableDefaultErrorPage: true,
-                mediaPlaybackRequiresUserGesture: false,
-                allowsInlineMediaPlayback: true,
-                allowsPictureInPictureMediaPlayback: true,
-                useOnDownloadStart: true,
-                javaScriptCanOpenWindowsAutomatically: true,
-                useShouldOverrideUrlLoading: true,
-                supportMultipleWindows: true,
+    final bool NcupIsDark =
+        MediaQuery.of(context).platformBrightness == Brightness.dark;
+
+    final Color bgColor = _safeAreaEnabled
+        ? _safeAreaBackgroundColor
+        : (NcupIsDark ? Colors.black : Colors.white);
+
+    final Widget webView = InAppWebView(
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        disableDefaultErrorPage: true,
+        mediaPlaybackRequiresUserGesture: false,
+        allowsInlineMediaPlayback: true,
+        allowsPictureInPictureMediaPlayback: true,
+        useOnDownloadStart: true,
+        javaScriptCanOpenWindowsAutomatically: true,
+        useShouldOverrideUrlLoading: true,
+        supportMultipleWindows: true,
+      ),
+      initialUrlRequest: URLRequest(
+        url: WebUri(NcupCurrentUrl),
+      ),
+      onWebViewCreated: (InAppWebViewController NcupController) async {
+        NcupWebViewController = NcupController;
+
+        // Инициализация UA
+        try {
+          final ua = await NcupController.evaluateJavascript(
+            source: "navigator.userAgent",
+          );
+          if (ua is String && ua.trim().isNotEmpty) {
+            _baseUserAgent = ua.trim();
+            _currentUserAgent = _baseUserAgent!;
+            NcupDeviceProfileInstance.NcupBaseUserAgent = _baseUserAgent;
+            debugPrint('[UA] INITIAL: $_baseUserAgent');
+          }
+        } catch (e) {
+          NcupVaultInstance.NcupLoggerInstance
+              .NcupLogWarn('Failed to read navigator.userAgent: $e');
+        }
+
+        await _applyNormalUserAgentIfNeeded();
+
+        // После создания WebView — актуализируем localStorage
+
+
+        // НОВОЕ: через 6 секунд после открытия экрана — восстановление app_data из SharedPreferences
+        Future<void>.delayed(const Duration(seconds: 6), () async {
+          if (!mounted) return;
+          await _restoreAppDataFromPrefsToLocalStorage();
+        });
+
+        NcupWebViewController.addJavaScriptHandler(
+          handlerName: 'onServerResponse',
+          callback: (List<dynamic> NcupArgs) {
+            NcupVaultInstance.NcupLoggerInstance
+                .NcupLogInfo("JS Args: $NcupArgs");
+
+            try {
+              dynamic first = NcupArgs.isNotEmpty ? NcupArgs[0] : null;
+
+              if (first is List && first.isNotEmpty) {
+                first = first.first;
+              }
+
+              if (first is Map) {
+                final Map<dynamic, dynamic> root = first;
+
+                // safearea + userAgent из сервера
+                _updateSafeAreaFromServerPayload(root);
+                _updateUserAgentFromServerPayload(root);
+                _applyNormalUserAgentIfNeeded();
+
+                // При каждом ответе сервера можно обновлять localStorage
+                //_updateLocalStorage();
+              }
+
+              try {
+                return NcupArgs
+                    .reduce((dynamic NcupV, dynamic NcupE) => NcupV + NcupE);
+              } catch (_) {
+                return NcupArgs.toString();
+              }
+            } catch (e) {
+              return NcupArgs.toString();
+            }
+          },
+        );
+      },
+      onLoadStart: (
+          InAppWebViewController NcupController,
+          Uri? NcupUri,
+          ) async {
+        NcupStartLoadTimestamp = DateTime.now().millisecondsSinceEpoch;
+
+        if (NcupUri != null) {
+          if (_isGoogleUrl(NcupUri)) {
+            await _addRandomToUserAgentForGoogle();
+          } else {
+            await _restoreUserAgentAfterGoogleIfNeeded();
+            await _applyNormalUserAgentIfNeeded();
+          }
+
+          if (NcupKit.NcupLooksLikeBareMail(NcupUri)) {
+            try {
+              await NcupController.stopLoading();
+            } catch (_) {}
+            final Uri NcupMailto = NcupKit.NcupToMailto(NcupUri);
+            await NcupLinker.NcupOpen(
+              NcupKit.NcupGmailize(NcupMailto),
+            );
+            return;
+          }
+
+          // банки
+          if (NcupIsBankScheme(NcupUri) ||
+              ((NcupUri.scheme == 'http' || NcupUri.scheme == 'https') &&
+                  NcupIsBankDomain(NcupUri))) {
+            try {
+              await NcupController.stopLoading();
+            } catch (_) {}
+            await NcupOpenBank(NcupUri);
+            return;
+          }
+
+          final String NcupScheme = NcupUri.scheme.toLowerCase();
+          if (NcupScheme != 'http' && NcupScheme != 'https') {
+            try {
+              await NcupController.stopLoading();
+            } catch (_) {}
+          }
+        }
+      },
+      onLoadStop: (
+          InAppWebViewController NcupController,
+          Uri? NcupUri,
+          ) async {
+        await NcupController.evaluateJavascript(
+          source: "console.log('Hello from Roulette JS!');",
+        );
+
+        setState(() {
+          NcupCurrentUrl = NcupUri?.toString() ?? NcupCurrentUrl;
+        });
+
+        await _restoreUserAgentAfterGoogleIfNeeded();
+        await _applyNormalUserAgentIfNeeded();
+
+        // После полной загрузки страницы обновляем localStorage
+      //  await _updateLocalStorage();
+
+        // И НОВОЕ: сразу тянем app_data из SharedPreferences в localStorage
+        await _restoreAppDataFromPrefsToLocalStorage();
+
+        Future<void>.delayed(const Duration(seconds: 20), () {
+          NcupSendLoadedOnce();
+        });
+      },
+      shouldOverrideUrlLoading: (
+          InAppWebViewController NcupController,
+          NavigationAction NcupNav,
+          ) async {
+        final Uri? NcupUri = NcupNav.request.url;
+        if (NcupUri == null) {
+          return NavigationActionPolicy.ALLOW;
+        }
+
+        if (_isGoogleUrl(NcupUri)) {
+          await _addRandomToUserAgentForGoogle();
+        } else {
+          await _restoreUserAgentAfterGoogleIfNeeded();
+          await _applyNormalUserAgentIfNeeded();
+        }
+
+        if (NcupKit.NcupLooksLikeBareMail(NcupUri)) {
+          final Uri NcupMailto = NcupKit.NcupToMailto(NcupUri);
+          await NcupLinker.NcupOpen(
+            NcupKit.NcupGmailize(NcupMailto),
+          );
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        final String NcupScheme = NcupUri.scheme.toLowerCase();
+
+        if (NcupScheme == 'mailto') {
+          await NcupLinker.NcupOpen(
+            NcupKit.NcupGmailize(NcupUri),
+          );
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        if (NcupIsBankScheme(NcupUri) ||
+            ((NcupScheme == 'http' || NcupScheme == 'https') &&
+                NcupIsBankDomain(NcupUri))) {
+          await NcupOpenBank(NcupUri);
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        if (NcupScheme == 'tel') {
+          await launchUrl(
+            NcupUri,
+            mode: LaunchMode.externalApplication,
+          );
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        final String NcupHost = NcupUri.host.toLowerCase();
+        final bool NcupIsSocial = NcupHost.endsWith('facebook.com') ||
+            NcupHost.endsWith('instagram.com') ||
+            NcupHost.endsWith('twitter.com') ||
+            NcupHost.endsWith('x.com');
+
+        if (NcupIsSocial) {
+          await NcupLinker.NcupOpen(NcupUri);
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        if (NcupIsExternalDestination(NcupUri)) {
+          final Uri NcupMapped = NcupMapExternalToHttp(NcupUri);
+          await NcupLinker.NcupOpen(NcupMapped);
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        if (NcupScheme != 'http' && NcupScheme != 'https') {
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        return NavigationActionPolicy.ALLOW;
+      },
+      onCreateWindow: (
+          InAppWebViewController NcupController,
+          CreateWindowAction NcupReq,
+          ) async {
+        final Uri? NcupUrl = NcupReq.request.url;
+        if (NcupUrl == null) return false;
+
+        if (_isGoogleUrl(NcupUrl)) {
+          await _addRandomToUserAgentForGoogle();
+        } else {
+          await _restoreUserAgentAfterGoogleIfNeeded();
+          await _applyNormalUserAgentIfNeeded();
+        }
+
+        if (NcupKit.NcupLooksLikeBareMail(NcupUrl)) {
+          final Uri NcupMail = NcupKit.NcupToMailto(NcupUrl);
+          await NcupLinker.NcupOpen(
+            NcupKit.NcupGmailize(NcupMail),
+          );
+          return false;
+        }
+
+        final String NcupScheme = NcupUrl.scheme.toLowerCase();
+
+        if (NcupScheme == 'mailto') {
+          await NcupLinker.NcupOpen(
+            NcupKit.NcupGmailize(NcupUrl),
+          );
+          return false;
+        }
+
+        if (NcupIsBankScheme(NcupUrl) ||
+            ((NcupScheme == 'http' || NcupScheme == 'https') &&
+                NcupIsBankDomain(NcupUrl))) {
+          await NcupOpenBank(NcupUrl);
+          return false;
+        }
+
+        if (NcupScheme == 'tel') {
+          await launchUrl(
+            NcupUrl,
+            mode: LaunchMode.externalApplication,
+          );
+          return false;
+        }
+
+        final String NcupHost = NcupUrl.host.toLowerCase();
+        final bool NcupIsSocial = NcupHost.endsWith('facebook.com') ||
+            NcupHost.endsWith('instagram.com') ||
+            NcupHost.endsWith('twitter.com') ||
+            NcupHost.endsWith('x.com');
+
+        if (NcupIsSocial) {
+          await NcupLinker.NcupOpen(NcupUrl);
+          return false;
+        }
+
+        if (NcupIsExternalDestination(NcupUrl)) {
+          final Uri NcupMapped = NcupMapExternalToHttp(NcupUrl);
+          await NcupLinker.NcupOpen(NcupMapped);
+          return false;
+        }
+
+        // ---- popup‑логика: всё, что осталось http/https — открываем во всплывающем WebView ----
+        if (NcupScheme == 'http' || NcupScheme == 'https') {
+          _openPopup(NcupReq, urlString: NcupUrl.toString());
+          return true; // говорим WebView, что создаём окно сами
+        }
+
+        return false;
+      },
+    );
+
+    final Widget body = Stack(
+      children: <Widget>[
+        webView,
+        if (NcupOverlayBusy)
+          const Positioned.fill(
+            child: ColoredBox(
+              color: Colors.black87,
+              child: Center(
+                child: CircularProgressIndicator(),
               ),
-              initialUrlRequest: URLRequest(
-                url: WebUri(loungeOfIdlenessCurrentUrl),
-              ),
-              onWebViewCreated:
-                  (InAppWebViewController loungeOfIdlenessController) {
-                loungeOfIdlenessWebViewController =
-                    loungeOfIdlenessController;
-
-                loungeOfIdlenessWebViewController
-                    .addJavaScriptHandler(
-                  handlerName: 'onServerResponse',
-                  callback:
-                      (List<dynamic> loungeOfIdlenessArgs) {
-                    loungeOfIdlenessVault
-                        .loungeOfIdlenessLogger
-                        .loungeOfIdlenessLogInfo(
-                        "JS Args: $loungeOfIdlenessArgs");
-                    try {
-                      return loungeOfIdlenessArgs.reduce(
-                            (dynamic loungeOfIdlenessV,
-                            dynamic loungeOfIdlenessE) =>
-                        loungeOfIdlenessV + loungeOfIdlenessE,
-                      );
-                    } catch (_) {
-                      return loungeOfIdlenessArgs.toString();
-                    }
-                  },
-                );
-              },
-              onLoadStart: (
-                  InAppWebViewController loungeOfIdlenessController,
-                  Uri? loungeOfIdlenessUri,
-                  ) async {
-                loungeOfIdlenessStartLoadTimestamp =
-                    DateTime.now().millisecondsSinceEpoch;
-
-                if (loungeOfIdlenessUri != null) {
-                  if (LoungeOfIdlenessKit
-                      .loungeOfIdlenessLooksLikeBareMail(
-                      loungeOfIdlenessUri)) {
-                    try {
-                      await loungeOfIdlenessController
-                          .stopLoading();
-                    } catch (_) {}
-                    final Uri loungeOfIdlenessMailto =
-                    LoungeOfIdlenessKit.loungeOfIdlenessToMailto(
-                        loungeOfIdlenessUri);
-                    await LoungeOfIdlenessLinker
-                        .loungeOfIdlenessOpen(
-                      LoungeOfIdlenessKit.loungeOfIdlenessGmailize(
-                          loungeOfIdlenessMailto),
-                    );
-                    return;
-                  }
-
-                  final String loungeOfIdlenessScheme =
-                  loungeOfIdlenessUri.scheme.toLowerCase();
-                  if (loungeOfIdlenessScheme != 'http' &&
-                      loungeOfIdlenessScheme != 'https') {
-                    try {
-                      await loungeOfIdlenessController
-                          .stopLoading();
-                    } catch (_) {}
-                  }
-                }
-              },
-              onLoadStop: (
-                  InAppWebViewController loungeOfIdlenessController,
-                  Uri? loungeOfIdlenessUri,
-                  ) async {
-                await loungeOfIdlenessController
-                    .evaluateJavascript(
-                  source: "console.log('Hello from Roulette JS!');",
-                );
-
-                setState(() {
-                  loungeOfIdlenessCurrentUrl =
-                      loungeOfIdlenessUri?.toString() ??
-                          loungeOfIdlenessCurrentUrl;
-                });
-
-                Future<void>.delayed(
-                    const Duration(seconds: 20), () {
-                  loungeOfIdlenessSendLoadedOnce();
-                });
-              },
-              shouldOverrideUrlLoading: (
-                  InAppWebViewController loungeOfIdlenessController,
-                  NavigationAction loungeOfIdlenessNav,
-                  ) async {
-                final Uri? loungeOfIdlenessUri =
-                    loungeOfIdlenessNav.request.url;
-                if (loungeOfIdlenessUri == null) {
-                  return NavigationActionPolicy.ALLOW;
-                }
-
-                if (LoungeOfIdlenessKit
-                    .loungeOfIdlenessLooksLikeBareMail(
-                    loungeOfIdlenessUri)) {
-                  final Uri loungeOfIdlenessMailto =
-                  LoungeOfIdlenessKit.loungeOfIdlenessToMailto(
-                      loungeOfIdlenessUri);
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                    LoungeOfIdlenessKit.loungeOfIdlenessGmailize(
-                        loungeOfIdlenessMailto),
-                  );
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                final String loungeOfIdlenessScheme =
-                loungeOfIdlenessUri.scheme.toLowerCase();
-
-                if (loungeOfIdlenessScheme == 'mailto') {
-                  await LoungeOfIdlenessLinker.loungeOfIdlenessOpen(
-                    LoungeOfIdlenessKit.loungeOfIdlenessGmailize(
-                        loungeOfIdlenessUri),
-                  );
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                if (loungeOfIdlenessScheme == 'tel') {
-                  await launchUrl(
-                    loungeOfIdlenessUri,
-                    mode: LaunchMode.externalApplication,
-                  );
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                final String loungeOfIdlenessHost =
-                loungeOfIdlenessUri.host.toLowerCase();
-                final bool loungeOfIdlenessIsSocial =
-                    loungeOfIdlenessHost.endsWith('facebook.com') ||
-                        loungeOfIdlenessHost.endsWith('instagram.com') ||
-                        loungeOfIdlenessHost.endsWith('twitter.com') ||
-                        loungeOfIdlenessHost.endsWith('x.com');
-
-                if (loungeOfIdlenessIsSocial) {
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                      loungeOfIdlenessUri);
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                if (loungeOfIdlenessIsExternalDestination(
-                    loungeOfIdlenessUri)) {
-                  final Uri loungeOfIdlenessMapped =
-                  loungeOfIdlenessMapExternalToHttp(
-                      loungeOfIdlenessUri);
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                      loungeOfIdlenessMapped);
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                if (loungeOfIdlenessScheme != 'http' &&
-                    loungeOfIdlenessScheme != 'https') {
-                  return NavigationActionPolicy.CANCEL;
-                }
-
-                return NavigationActionPolicy.ALLOW;
-              },
-              onCreateWindow: (
-                  InAppWebViewController loungeOfIdlenessController,
-                  CreateWindowAction loungeOfIdlenessReq,
-                  ) async {
-                final Uri? loungeOfIdlenessUrl =
-                    loungeOfIdlenessReq.request.url;
-                if (loungeOfIdlenessUrl == null) return false;
-
-                if (LoungeOfIdlenessKit
-                    .loungeOfIdlenessLooksLikeBareMail(
-                    loungeOfIdlenessUrl)) {
-                  final Uri loungeOfIdlenessMail =
-                  LoungeOfIdlenessKit.loungeOfIdlenessToMailto(
-                      loungeOfIdlenessUrl);
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                    LoungeOfIdlenessKit.loungeOfIdlenessGmailize(
-                        loungeOfIdlenessMail),
-                  );
-                  return false;
-                }
-
-                final String loungeOfIdlenessScheme =
-                loungeOfIdlenessUrl.scheme.toLowerCase();
-
-                if (loungeOfIdlenessScheme == 'mailto') {
-                  await LoungeOfIdlenessLinker.loungeOfIdlenessOpen(
-                    LoungeOfIdlenessKit.loungeOfIdlenessGmailize(
-                        loungeOfIdlenessUrl),
-                  );
-                  return false;
-                }
-
-                if (loungeOfIdlenessScheme == 'tel') {
-                  await launchUrl(
-                    loungeOfIdlenessUrl,
-                    mode: LaunchMode.externalApplication,
-                  );
-                  return false;
-                }
-
-                final String loungeOfIdlenessHost =
-                loungeOfIdlenessUrl.host.toLowerCase();
-                final bool loungeOfIdlenessIsSocial =
-                    loungeOfIdlenessHost.endsWith('facebook.com') ||
-                        loungeOfIdlenessHost.endsWith('instagram.com') ||
-                        loungeOfIdlenessHost.endsWith('twitter.com') ||
-                        loungeOfIdlenessHost.endsWith('x.com');
-
-                if (loungeOfIdlenessIsSocial) {
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                      loungeOfIdlenessUrl);
-                  return false;
-                }
-
-                if (loungeOfIdlenessIsExternalDestination(
-                    loungeOfIdlenessUrl)) {
-                  final Uri loungeOfIdlenessMapped =
-                  loungeOfIdlenessMapExternalToHttp(
-                      loungeOfIdlenessUrl);
-                  await LoungeOfIdlenessLinker
-                      .loungeOfIdlenessOpen(
-                      loungeOfIdlenessMapped);
-                  return false;
-                }
-
-                if (loungeOfIdlenessScheme == 'http' ||
-                    loungeOfIdlenessScheme == 'https') {
-                  loungeOfIdlenessController.loadUrl(
-                    urlRequest: URLRequest(
-                      url: WebUri(
-                          loungeOfIdlenessUrl.toString()),
-                    ),
-                  );
-                }
-
-                return false;
-              },
             ),
-            if (loungeOfIdlenessOverlayBusy)
-              const Positioned.fill(
-                child: ColoredBox(
-                  color: Colors.black87,
-                  child: Center(
-                    child: LoungeOfIdlenessWaveLoader(),
-                  ),
-                ),
-              ),
-          ],
-        ),
+          ),
+        _buildPopupOverlay(),
+      ],
+    );
+
+    final Widget wrapped = _safeAreaEnabled ? SafeArea(child: body) : body;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // Обычно на тёмном фоне нужен светлый текст статус-бара
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,         // или твой цвет
+        statusBarIconBrightness: Brightness.light,  // ANDROID: светлые иконки
+        statusBarBrightness: Brightness.dark,       // iOS: светлые иконки
+      ),
+      child: Scaffold(
+        backgroundColor: bgColor,
+        body: wrapped,
       ),
     );
   }
@@ -1107,85 +1830,59 @@ class _LoungeOfIdlenessTableViewState
   // Внешние “столы” (протоколы/мессенджеры/соцсети)
   // ========================================================================
 
-  bool loungeOfIdlenessIsExternalDestination(Uri loungeOfIdlenessUri) {
-    final String loungeOfIdlenessScheme =
-    loungeOfIdlenessUri.scheme.toLowerCase();
-    if (loungeOfIdlenessExternalSchemes
-        .contains(loungeOfIdlenessScheme)) {
+  bool NcupIsExternalDestination(Uri NcupUri) {
+    final String NcupScheme = NcupUri.scheme.toLowerCase();
+    if (NcupExternalSchemes.contains(NcupScheme)) {
       return true;
     }
 
-    if (loungeOfIdlenessScheme == 'http' ||
-        loungeOfIdlenessScheme == 'https') {
-      final String loungeOfIdlenessHost =
-      loungeOfIdlenessUri.host.toLowerCase();
-      if (loungeOfIdlenessExternalHosts
-          .contains(loungeOfIdlenessHost)) {
+    if (NcupScheme == 'http' || NcupScheme == 'https') {
+      final String NcupHost = NcupUri.host.toLowerCase();
+      if (NcupExternalHosts.contains(NcupHost)) {
         return true;
       }
-      if (loungeOfIdlenessHost.endsWith('t.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('wa.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('m.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('signal.me')) return true;
-      if (loungeOfIdlenessHost.endsWith('facebook.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('instagram.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('twitter.com')) return true;
-      if (loungeOfIdlenessHost.endsWith('x.com')) return true;
+      if (NcupHost.endsWith('t.me')) return true;
+      if (NcupHost.endsWith('wa.me')) return true;
+      if (NcupHost.endsWith('m.me')) return true;
+      if (NcupHost.endsWith('signal.me')) return true;
+      if (NcupHost.endsWith('facebook.com')) return true;
+      if (NcupHost.endsWith('instagram.com')) return true;
+      if (NcupHost.endsWith('twitter.com')) return true;
+      if (NcupHost.endsWith('x.com')) return true;
     }
 
     return false;
   }
 
-  Uri loungeOfIdlenessMapExternalToHttp(Uri loungeOfIdlenessUri) {
-    final String loungeOfIdlenessScheme =
-    loungeOfIdlenessUri.scheme.toLowerCase();
+  Uri NcupMapExternalToHttp(Uri NcupUri) {
+    final String NcupScheme = NcupUri.scheme.toLowerCase();
 
-    if (loungeOfIdlenessScheme == 'tg' ||
-        loungeOfIdlenessScheme == 'telegram') {
-      final Map<String, String> loungeOfIdlenessQp =
-          loungeOfIdlenessUri.queryParameters;
-      final String? loungeOfIdlenessDomain =
-      loungeOfIdlenessQp['domain'];
-      if (loungeOfIdlenessDomain != null &&
-          loungeOfIdlenessDomain.isNotEmpty) {
-        return Uri.https(
-          't.me',
-          '/$loungeOfIdlenessDomain',
-          <String, String>{
-            if (loungeOfIdlenessQp['start'] != null)
-              'start': loungeOfIdlenessQp['start']!,
-          },
-        );
+    if (NcupScheme == 'tg' || NcupScheme == 'telegram') {
+      final Map<String, String> NcupQp = NcupUri.queryParameters;
+      final String? NcupDomain = NcupQp['domain'];
+      if (NcupDomain != null && NcupDomain.isNotEmpty) {
+        return Uri.https('t.me', '/$NcupDomain', <String, String>{
+          if (NcupQp['start'] != null) 'start': NcupQp['start']!,
+        });
       }
-      final String loungeOfIdlenessPath =
-      loungeOfIdlenessUri.path.isNotEmpty
-          ? loungeOfIdlenessUri.path
-          : '';
+      final String NcupPath = NcupUri.path.isNotEmpty ? NcupUri.path : '';
       return Uri.https(
         't.me',
-        '/$loungeOfIdlenessPath',
-        loungeOfIdlenessUri.queryParameters.isEmpty
-            ? null
-            : loungeOfIdlenessUri.queryParameters,
+        '/$NcupPath',
+        NcupUri.queryParameters.isEmpty ? null : NcupUri.queryParameters,
       );
     }
 
-    if (loungeOfIdlenessScheme == 'whatsapp') {
-      final Map<String, String> loungeOfIdlenessQp =
-          loungeOfIdlenessUri.queryParameters;
-      final String? loungeOfIdlenessPhone =
-      loungeOfIdlenessQp['phone'];
-      final String? loungeOfIdlenessText =
-      loungeOfIdlenessQp['text'];
-      if (loungeOfIdlenessPhone != null &&
-          loungeOfIdlenessPhone.isNotEmpty) {
+    if (NcupScheme == 'whatsapp') {
+      final Map<String, String> NcupQp = NcupUri.queryParameters;
+      final String? NcupPhone = NcupQp['phone'];
+      final String? NcupText = NcupQp['text'];
+      if (NcupPhone != null && NcupPhone.isNotEmpty) {
         return Uri.https(
           'wa.me',
-          '/${LoungeOfIdlenessKit.loungeOfIdlenessDigitsOnly(loungeOfIdlenessPhone)}',
+          '/${NcupKit.NcupDigitsOnly(NcupPhone)}',
           <String, String>{
-            if (loungeOfIdlenessText != null &&
-                loungeOfIdlenessText.isNotEmpty)
-              'text': loungeOfIdlenessText,
+            if (NcupText != null && NcupText.isNotEmpty) 'text': NcupText,
           },
         );
       }
@@ -1193,48 +1890,40 @@ class _LoungeOfIdlenessTableViewState
         'wa.me',
         '/',
         <String, String>{
-          if (loungeOfIdlenessText != null &&
-              loungeOfIdlenessText.isNotEmpty)
-            'text': loungeOfIdlenessText,
+          if (NcupText != null && NcupText.isNotEmpty) 'text': NcupText,
         },
       );
     }
 
-    if (loungeOfIdlenessScheme == 'bnl') {
-      final String loungeOfIdlenessNewPath =
-      loungeOfIdlenessUri.path.isNotEmpty
-          ? loungeOfIdlenessUri.path
-          : '';
+    if (NcupScheme == 'bnl') {
+      final String NcupNewPath = NcupUri.path.isNotEmpty ? NcupUri.path : '';
       return Uri.https(
         'bnl.com',
-        '/$loungeOfIdlenessNewPath',
-        loungeOfIdlenessUri.queryParameters.isEmpty
-            ? null
-            : loungeOfIdlenessUri.queryParameters,
+        '/$NcupNewPath',
+        NcupUri.queryParameters.isEmpty ? null : NcupUri.queryParameters,
       );
     }
 
-    return loungeOfIdlenessUri;
+    return NcupUri;
   }
 
-  Future<void> loungeOfIdlenessSendLoadedOnce() async {
-    if (loungeOfIdlenessLoadedOnceSent) {
+  Future<void> NcupSendLoadedOnce() async {
+    if (NcupLoadedOnceSent) {
       debugPrint('Wheel Loaded already sent, skip');
       return;
     }
 
-    final int loungeOfIdlenessNow =
-        DateTime.now().millisecondsSinceEpoch;
+    final int NcupNow = DateTime.now().millisecondsSinceEpoch;
 
-    await loungeOfIdlenessPostStat(
-      event: 'Loaded',
-      timeStart: loungeOfIdlenessStartLoadTimestamp,
-      timeFinish: loungeOfIdlenessNow,
-      url: loungeOfIdlenessCurrentUrl,
-      appSid: loungeOfIdlenessSpy.loungeOfIdlenessAppsFlyerUid,
-      firstPageTs: loungeOfIdlenessFirstPageTimestamp,
+    await NcupPostStat(
+      NcupEvent: 'Loaded',
+      NcupTimeStart: NcupStartLoadTimestamp,
+      NcupTimeFinish: NcupNow,
+      NcupUrl: NcupCurrentUrl,
+      NcupAppSid: NcupSpyInstance.NcupAppsFlyerUid,
+      NcupFirstPageTs: NcupFirstPageTimestamp,
     );
 
-    loungeOfIdlenessLoadedOnceSent = true;
+    NcupLoadedOnceSent = true;
   }
 }
